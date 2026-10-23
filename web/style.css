@@ -67,6 +67,15 @@ button:disabled { opacity: 0.5; cursor: default; }
 .m-start circle { fill: #2e7d32; }
 .m-end circle { fill: #c62828; }
 .m-start text, .m-end text { fill: #fff; font: 700 11px var(--font); text-anchor: middle; }
+.m-label { font: 500 11px var(--font); fill: var(--fg); text-anchor: middle;
+  stroke: var(--map-bg); stroke-width: 3px; stroke-linejoin: round; paint-order: stroke; }
+.m-shield text { font: 700 10px var(--font); text-anchor: middle; }
+.m-shield rect { stroke-width: 1.25; }
+.m-i rect { fill: #1d4f91; stroke: #fff; }
+.m-i text { fill: #fff; }
+.m-us rect, .m-ms rect { fill: #fff; stroke: #222; }
+.m-us text, .m-ms text { fill: #111; }
+.m-ms rect { rx: 8px; }
 .m-scale path { fill: none; stroke: var(--fg); stroke-width: 1.5; }
 .m-scale text { fill: var(--fg); font: 12px var(--font); }
 

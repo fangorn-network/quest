@@ -1,5 +1,5 @@
 //! Fastest route between two points on the graph (A* over directed edges, honouring turn restrictions),
-//! then turn-by-turn steps from the edge bearings. math.md §8 has the formulas.
+//! then turn-by-turn steps from the edge bearings.
 
 use crate::{Bundle, Location, ONEWAY, ROUNDABOUT};
 use serde::Serialize;

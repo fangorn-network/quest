@@ -123,3 +123,21 @@ fn suggests_while_typing() {
     // A whole address searched normally is unchanged by suggest mode.
     assert_eq!(q.geocode("400 High St, Jackson MS 39201", 1)[0].label, "400 High St, Jackson, MS 39201");
 }
+
+#[test]
+fn labels_roads() {
+    let Some(q) = quest() else { return eprintln!("no bundle, skipped") };
+    let svg = |req: serde_json::Value| -> String {
+        let out: serde_json::Value = serde_json::from_str(&q.call(&req.to_string())).unwrap();
+        out["svg"].as_str().unwrap().to_string()
+    };
+    // The whole state: interstate shields, no street names.
+    let state = svg(serde_json::json!({ "fn": "map", "width": 800, "height": 600 }));
+    assert!(state.contains("m-shield m-i") && state.contains(">I-55<"), "no I-55 shield");
+    assert!(!state.contains("m-label"), "street names at state scale");
+    // Downtown Jackson: street names, and the capitol's High Street among them.
+    let town = svg(serde_json::json!({ "fn": "map", "width": 800, "height": 600, "bbox": [32.295, -90.195, 32.31, -90.17] }));
+    assert!(town.contains("m-label") && town.contains(">High Street<"), "no street names downtown");
+    // Every label is well-formed text: nothing from OSM's names escapes into the markup.
+    assert_eq!(town.matches("<text").count(), town.matches("</text>").count());
+}

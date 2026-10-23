@@ -3,6 +3,7 @@
 
 use crate::Bundle;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Write;
 
 #[derive(Deserialize)]
@@ -51,6 +52,121 @@ fn group(class: &str) -> usize {
     }
 }
 const GROUPS: [&str; 4] = ["m-minor", "m-secondary", "m-primary", "m-major"];
+
+// ponytail: which roads carry labels at which zoom, and how far apart; knobs like max_view_km, tuned by eye.
+// The rank orders placement: a lower rank is placed first and wins where labels would overlap.
+fn shield_rank(class: &str, view_km: f64) -> Option<u8> {
+    match class {
+        "motorway" => Some(0),
+        "trunk" => Some(1),
+        "primary" if view_km <= 150.0 => Some(2),
+        _ => None,
+    }
+}
+fn name_rank(class: &str, view_km: f64) -> Option<u8> {
+    match class {
+        "motorway" | "trunk" | "primary" if view_km <= 25.0 => Some(3),
+        "secondary" | "tertiary" if view_km <= 25.0 => Some(4),
+        "unclassified" | "residential" | "living_street" if view_km <= 6.0 => Some(5),
+        "service" if view_km <= 2.0 => Some(6),
+        _ => None,
+    }
+}
+const SHIELD_EVERY_PX: f64 = 240.0;
+const NAME_EVERY_PX: f64 = 280.0;
+const MAX_LABELS: usize = 400;
+
+/// OSM names are anyone's text, and the SVG goes into the page: escape them.
+fn xml(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+/// A route number as its shield shows it, and the shield's class.
+fn shield(r: &str) -> (String, &'static str) {
+    match r.strip_prefix("I ") {
+        Some(n) => (format!("I-{n}"), "m-i"),
+        None if r.starts_with("US ") => (r.to_string(), "m-us"),
+        None => (r.to_string(), "m-ms"),
+    }
+}
+
+/// The edges carrying one label, joined end to end into polylines (lat, lon): a road's name runs across
+/// many short edges, too short alone to hold it.
+fn chains(b: &Bundle, edges: &[u32]) -> Vec<Vec<(f64, f64)>> {
+    let mut at: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (i, &e) in edges.iter().enumerate() {
+        at.entry(b.edge_u[e as usize]).or_default().push(i);
+        at.entry(b.edge_v[e as usize]).or_default().push(i);
+    }
+    let mut used = vec![false; edges.len()];
+    let mut out = Vec::new();
+    for start in 0..edges.len() {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let e0 = edges[start] as usize;
+        let mut pts = b.shape(e0 as u32);
+        for forward in [true, false] {
+            let mut node = if forward { b.edge_v[e0] } else { b.edge_u[e0] };
+            while let Some(&i) = at.get(&node).and_then(|v| v.iter().find(|&&i| !used[i])) {
+                used[i] = true;
+                let e = edges[i] as usize;
+                let mut more = b.shape(e as u32); // oriented to start at `node`
+                if b.edge_u[e] != node {
+                    more.reverse();
+                }
+                node = if b.edge_u[e] == node { b.edge_v[e] } else { b.edge_u[e] };
+                if forward {
+                    pts.extend(more.into_iter().skip(1));
+                } else {
+                    more.reverse();
+                    let n = more.len();
+                    pts.splice(0..0, more.into_iter().take(n - 1));
+                }
+            }
+        }
+        out.push(pts);
+    }
+    out
+}
+
+/// Where a label `w` px long fits along a polyline (px), about every `spacing` px: (x, y, upright angle).
+/// Skipped where the road bends too much over the label's length to read straight across.
+fn spots(pts: &[(f64, f64)], w: f64, spacing: f64) -> Vec<(f64, f64, f64)> {
+    let mut cum = vec![0.0];
+    for p in pts.windows(2) {
+        cum.push(cum.last().unwrap() + (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1));
+    }
+    let total = *cum.last().unwrap();
+    if pts.len() < 2 || total < w + 16.0 {
+        return Vec::new();
+    }
+    let at = |d: f64| {
+        let k = cum.partition_point(|&c| c < d).clamp(1, pts.len() - 1);
+        let seg = cum[k] - cum[k - 1];
+        let u = if seg > 0.0 { (d - cum[k - 1]) / seg } else { 0.0 };
+        (pts[k - 1].0 + u * (pts[k].0 - pts[k - 1].0), pts[k - 1].1 + u * (pts[k].1 - pts[k - 1].1))
+    };
+    let n = (total / spacing).floor().max(1.0) as usize;
+    (0..n)
+        .filter_map(|i| {
+            let d = total * (i as f64 + 0.5) / n as f64;
+            let (a, c) = (at(d - w / 2.0), at(d + w / 2.0));
+            if (c.0 - a.0).hypot(c.1 - a.1) < 0.9 * w {
+                return None;
+            }
+            let mut angle = (c.1 - a.1).atan2(c.0 - a.0).to_degrees();
+            if angle > 90.0 {
+                angle -= 180.0;
+            } else if angle <= -90.0 {
+                angle += 180.0;
+            }
+            let (x, y) = at(d);
+            Some((x, y, angle))
+        })
+        .collect()
+}
 
 impl Map {
     pub fn new(b: &Bundle) -> Map {
@@ -109,12 +225,28 @@ impl Map {
         let q = |d: f64| (d * 1e7) as i32;
         let (qs, qw, qn, qe) = (q(s), q(west), q(n), q(e));
         let mut paths = [String::new(), String::new(), String::new(), String::new()];
+        // Label text -> (rank, edges): (true, "US 49") a shield, (false, "N State St") a name.
+        let mut labelled: HashMap<(bool, String), (u8, Vec<u32>)> = HashMap::new();
         for (i, bx) in self.boxes.iter().enumerate() {
             let class = b.edge_class[i] as usize;
             if !allowed[class] || bx[2] < qs || bx[0] > qn || bx[3] < qw || bx[1] > qe {
                 continue;
             }
             line(&mut paths[group(&b.classes[class])], b.shape(i as u32).iter().map(|&(la, lo)| px(la, lo)));
+            let mut add = |shield: bool, text: &str, rank: u8| {
+                let entry = labelled.entry((shield, text.to_string())).or_insert((rank, Vec::new()));
+                entry.0 = entry.0.min(rank);
+                entry.1.push(i as u32);
+            };
+            if let Some(rank) = shield_rank(&b.classes[class], view_km) {
+                for r in b.names[b.edge_ref[i] as usize].split(';').map(str::trim).filter(|r| !r.is_empty()) {
+                    add(true, r, rank);
+                }
+            }
+            let name = &b.names[b.edge_name[i] as usize];
+            if let (Some(rank), false) = (name_rank(&b.classes[class], view_km), name.is_empty()) {
+                add(false, name, rank);
+            }
         }
         let mut route = String::new();
         line(&mut route, req.route.iter().map(|p| px(p[0], p[1])));
@@ -133,6 +265,45 @@ impl Map {
         if !route.is_empty() {
             let _ = write!(svg, r#"<path class="m-route-casing" d="{route}"/><path class="m-route" d="{route}"/>"#);
         }
+        // Labels: shields first, then names by road, each dropped where it would overlap one already placed
+        // (or the A/B markers), and only where it fits inside the map.
+        let mut taken: Vec<[f64; 4]> = [req.from, req.to]
+            .into_iter()
+            .flatten()
+            .map(|[la, lo]| {
+                let (x, y) = px(la, lo);
+                [x - 12.0, y - 12.0, x + 12.0, y + 12.0]
+            })
+            .collect();
+        let mut order: Vec<_> = labelled.into_iter().collect();
+        order.sort_by(|a, b| (a.1 .0, &a.0).cmp(&(b.1 .0, &b.0)));
+        let mut placed = 0;
+        for ((is_shield, text), (_, edges)) in order {
+            let (shown, class) = if is_shield { shield(&text) } else { (text.clone(), "") };
+            let chars = shown.chars().count() as f64;
+            let (lw, lh) = if is_shield { (chars * 6.6 + 10.0, 16.0) } else { (chars * 6.1 + 4.0, 12.0) };
+            for chain in chains(b, &edges) {
+                let pts: Vec<(f64, f64)> = chain.iter().map(|&(la, lo)| px(la, lo)).collect();
+                for (x, y, angle) in spots(&pts, lw, if is_shield { SHIELD_EVERY_PX } else { NAME_EVERY_PX }) {
+                    let a = if is_shield { 0.0 } else { angle.to_radians() };
+                    let hx = a.cos().abs() * lw / 2.0 + a.sin().abs() * lh / 2.0 + 3.0;
+                    let hy = a.sin().abs() * lw / 2.0 + a.cos().abs() * lh / 2.0 + 3.0;
+                    let r = [x - hx, y - hy, x + hx, y + hy];
+                    let inside = r[0] > 2.0 && r[1] > 2.0 && r[2] < w - 2.0 && r[3] < h - 2.0;
+                    if placed >= MAX_LABELS || !inside || taken.iter().any(|t| r[0] < t[2] && t[0] < r[2] && r[1] < t[3] && t[1] < r[3]) {
+                        continue;
+                    }
+                    taken.push(r);
+                    placed += 1;
+                    let _ = if is_shield {
+                        write!(svg, r#"<g class="m-shield {class}" transform="translate({x:.1} {y:.1})"><rect x="{:.1}" y="-8" width="{lw:.1}" height="16" rx="3"/><text dy="0.35em">{}</text></g>"#,
+                               -lw / 2.0, xml(&shown))
+                    } else {
+                        write!(svg, r#"<text class="m-label" transform="translate({x:.1} {y:.1}) rotate({angle:.1})" dy="0.35em">{}</text>"#, xml(&shown))
+                    };
+                }
+            }
+        }
         for (pt, class, label) in [(req.from, "m-start", "A"), (req.to, "m-end", "B")] {
             if let Some([la, lo]) = pt {
                 let (x, y) = px(la, lo);
@@ -149,7 +320,7 @@ impl Map {
         let mag = 10f64.powf(target.log10().floor());
         let nice = [1.0, 2.0, 5.0, 10.0].into_iter().map(|m| m * mag).filter(|&m| m <= target).last().unwrap_or(mag);
         let bar = nice / miles_per_px;
-        let label = if nice < 1.0 { format!("{:.0} ft", nice * 5280.0) } else { format!("{nice} mi") };
+        let label = if nice < 0.1 { format!("{:.0} ft", nice * 5280.0) } else { format!("{nice} mi") };
         let _ = write!(
             svg,
             r#"<g class="m-scale"><path d="M12 {y0:.0}v6h{bar:.1}v-6"/><text x="{:.1}" y="{:.0}">{label}</text></g></svg>"#,
