@@ -57,6 +57,9 @@ assert len(kept(place("Walmart", 32.3, -90.1, "store", "2530 Jackson Ave W"), pl
 # A stale OSM brand with no address, on top of the station as it is now: one. Opposite corners: two.
 assert kept(place("BP", 32.35862, -90.01258, src=1), place("Grants Ferry Marathon", 32.35873, -90.01225, street="691 Grants Ferry Rd")) == ["Grants Ferry Marathon"]
 assert len(kept(place("Texaco", 32.35844, -90.01318, street="690 Grants Ferry Rd"), place("Grants Ferry Marathon", 32.35873, -90.01225, street="691 Grants Ferry Rd"))) == 2
+# Generic words aside, a typo apart: one place. Different names that only share a generic word: two.
+assert kept(place("Thai Zap", 32.33702, -90.06670, "restaurant", src=1), place("Thai Zapp Restaurant", 32.33709, -90.06672, "restaurant", "145 Market St")) == ["Thai Zapp Restaurant"]
+assert len(kept(place("Joe's Grill", 32.3, -90.1, "restaurant"), place("Mama's Grill", 32.3 + 30 * m, -90.1, "restaurant"))) == 2
 # A shopping centre's tenants share its address, and stay separate places.
 assert kept(place("Five Guys", 32.43389, -90.14833, "restaurant", "1000 Highland Colony Pkwy"),
             place("Local 463", 32.43450, -90.14838, "restaurant", "1000 Highland Colony Pkwy")) == ["Five Guys", "Local 463"]

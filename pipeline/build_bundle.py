@@ -294,9 +294,20 @@ def edit_distance(a, b):
     return prev[-1]
 
 
+# Words that say what a place is rather than which one: "Thai Zapp Restaurant" is "Thai Zap".
+GENERIC = {"RESTAURANT", "CAFE", "GRILL", "BAR", "STATION", "STORE", "SHOP", "INC", "LLC", "CO", "THE", "AND"}
+
+
 def name_like(a, b):
     """Two normalized names for one place: equal, one the other's first words ("TEXACO" / "TEXACO FLOWOOD"),
-    or a typo apart ("SUNCO" / "SUNOCO")."""
+    or a typo apart ("SUNCO" / "SUNOCO"), with or without generic words ("THAI ZAPP RESTAURANT" / "THAI ZAP")."""
+    if like(a, b):
+        return True
+    core = lambda n: " ".join(w for w in n.split() if w not in GENERIC) or n
+    return like(core(a), core(b))
+
+
+def like(a, b):
     if a == b:
         return True
     short, long_ = sorted((a.split(), b.split()), key=len)

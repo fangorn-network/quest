@@ -63,6 +63,12 @@ fn singular_phrase(s: &str) -> String {
     clean.split_whitespace().map(singular).collect::<Vec<_>>().join(" ")
 }
 
+/// Does place i's category ("thai restaurant") or name ("Thai Zapp") carry the words of `q`?
+fn qualified(b: &Bundle, q: &str, i: usize) -> bool {
+    has_words(&singular_phrase(&b.place_cats[b.pl_cat[i] as usize]), q)
+        || has_words(&singular_phrase(&b.place_names[b.pl_name[i] as usize]), q)
+}
+
 /// Is `part` a whole-word piece of `whole`?
 fn has_words(whole: &str, part: &str) -> bool {
     format!(" {whole} ").contains(&format!(" {part} "))
@@ -142,8 +148,18 @@ pub fn search(b: &Bundle, g: &Geocoder, query: &str, near: Option<[f64; 2]>, lim
         (0..g.kinds.words_len()).filter(|&k| g.kinds.words_of(k).iter().any(|w| test(w))).map(|k| k as u8).collect()
     };
     let mut kinds = kind_hits(&|w| w == phrase);
+    // A kind's word inside the phrase, the rest qualifying it: "thai food" is restaurants that are Thai (by
+    // their category, "thai restaurant", or their name). A qualifier nothing matches ("cheap gas") is dropped.
+    let mut qualifier = String::new();
     if kinds.is_empty() {
-        kinds = kind_hits(&|w| has_words(&phrase, w));
+        let words = (0..g.kinds.words_len()).flat_map(|k| g.kinds.words_of(k).iter());
+        if let Some(w) = words.filter(|w| has_words(&phrase, w)).max_by_key(|w| w.len()).cloned() {
+            kinds = kind_hits(&|x| x == w);
+            qualifier = format!(" {phrase} ").replacen(&format!(" {w} "), " ", 1).trim().to_string();
+        }
+    }
+    if !qualifier.is_empty() && !(0..b.pl_name.len()).any(|i| kinds.contains(&b.pl_kind[i]) && qualified(b, &qualifier, i)) {
+        qualifier.clear();
     }
     if kinds.is_empty() {
         kinds = kind_hits(&|w| has_words(w, &phrase));
@@ -156,7 +172,12 @@ pub fn search(b: &Bundle, g: &Geocoder, query: &str, near: Option<[f64; 2]>, lim
     let by_name = kinds.is_empty() && cats.is_empty();
     let (what, matches): (String, Box<dyn Fn(usize) -> bool>) = if !kinds.is_empty() {
         let label = kinds.iter().map(|&k| g.kinds.label(k)).collect::<Vec<_>>().join(", ");
-        (label, Box::new(move |i| kinds.contains(&b.pl_kind[i])))
+        if qualifier.is_empty() {
+            (label, Box::new(move |i| kinds.contains(&b.pl_kind[i])))
+        } else {
+            let what = format!("{qualifier} {label}");
+            (what, Box::new(move |i| kinds.contains(&b.pl_kind[i]) && qualified(b, &qualifier, i)))
+        }
     } else if !cats.is_empty() {
         (phrase.clone(), Box::new(move |i| cats.contains(&b.pl_cat[i])))
     } else {

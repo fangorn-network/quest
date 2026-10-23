@@ -172,6 +172,16 @@ fn finds_places_near_somewhere() {
     for addr in ["5657 Highway 25", "690 Grants Ferry Rd", "691 Grants Ferry Rd"] {
         assert!(flowood.iter().any(|l| l.contains(addr)), "{addr} missing from {} Flowood results", flowood.len());
     }
+    // A kind word with a qualifier: "Thai food" is Thai restaurants, not every restaurant; Thai Zap (OSM) and
+    // Thai Zapp Restaurant (Overture), 2 m apart, are one place.
+    let thai = q.places("Thai food in flowood", None, 20).unwrap();
+    assert_eq!(thai.what, "thai restaurant");
+    // Only Thai places (by name, or by category like Tuk Tuk Boom), the nearest first: not Flowood's other 90+ restaurants.
+    assert!(thai.results.len() >= 3 && thai.results.len() < 20, "{} results", thai.results.len());
+    assert!(thai.results[0].label.starts_with("Thai Zapp"), "{}", thai.results[0].label);
+    assert_eq!(thai.results.iter().filter(|l| l.label.to_lowercase().starts_with("thai zap")).count(), 1, "Thai Zap listed twice");
+    // A qualifier nothing matches is dropped: "cheap gas" is gas stations.
+    assert_eq!(q.places("cheap gas near Hattiesburg", None, 5).unwrap().what, "gas station");
     // A category that is no kind of ours, and a name.
     assert!(q.places("barbecue in Clarksdale", None, 20).unwrap().results.iter().any(|l| l.label.starts_with("Abe's")));
     let walmart = q.places("Walmart near Oxford", None, 10).unwrap();
