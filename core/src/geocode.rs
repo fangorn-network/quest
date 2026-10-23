@@ -239,22 +239,23 @@ impl Geocoder {
                 found = self.find(b, &p, streets, z);
             }
         }
-        found.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then_with(|| a.3.label.cmp(&b.3.label)));
+        found.sort_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)).then_with(|| a.4.label.cmp(&b.4.label)));
         // One answer per place: OSM and TIGER often hold the same address under "Drive"/"Dr" or two ZIPs.
         // Keep the best of any that share a street name and lie within ~400 m of each other.
         let mut kept: Vec<(String, f64, f64)> = Vec::new();
-        found.retain(|(_, _, key, loc)| {
+        found.retain(|(_, _, _, key, loc)| {
             let dup = kept.iter().any(|(k, la, lo)| k == key && (la - loc.lat).abs() < 0.004 && (lo - loc.lon).abs() < 0.004);
             if !dup {
                 kept.push((key.clone(), loc.lat, loc.lon));
             }
             !dup
         });
-        found.into_iter().take(limit).map(|(_, _, _, loc)| loc).collect()
+        found.into_iter().take(limit).map(|(_, _, _, _, loc)| loc).collect()
     }
 
-    /// (street score, quality rank, street key, location) for every street and ZIP that holds the address.
-    fn find(&self, b: &Bundle, p: &Parsed, streets: &[(u32, u8)], zips: Option<&[u32]>) -> Vec<(u8, u8, String, Location)> {
+    /// (street score, ZIP preference, quality rank, street key, location) for every street and ZIP that holds
+    /// the address. The preference is the ZIP's place in the typed town's list, strongest first (0 with no town).
+    fn find(&self, b: &Bundle, p: &Parsed, streets: &[(u32, u8)], zips: Option<&[u32]>) -> Vec<(u8, usize, u8, String, Location)> {
         let zip_ok = |z: u32| zips.is_none_or(|zs| zs.contains(&z));
         let mut out = Vec::new();
         let mut push = |score: u8, rank: u8, sid: u32, zip: u32, (edge, t): (u32, f32)| {
@@ -269,7 +270,8 @@ impl Geocoder {
             let num = p.number.map_or(String::new(), |n| format!("{n} "));
             let label = format!("{num}{}, {place}MS {zip:05}", b.streets[sid as usize].0);
             let quality = ["exact", "interpolated", "approximate"][rank as usize].to_string();
-            out.push((score, rank, b.streets[sid as usize].1.clone(), Location { label, edge, t, lat, lon, quality }));
+            let pref = zips.and_then(|zs| zs.iter().position(|&z| z == zip)).unwrap_or(0);
+            out.push((score, pref, rank, b.streets[sid as usize].1.clone(), Location { label, edge, t, lat, lon, quality }));
         };
         for &(sid, score) in streets {
             let rngs = equal_range(&b.rng_street, sid);

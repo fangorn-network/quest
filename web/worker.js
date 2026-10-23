@@ -2,8 +2,11 @@
 // {fn: "geocode" | "route"} requests. Everything stays in this tab: the only fetches are this site's own
 // files, made the same way whatever the person types.
 
+// The region's data lives in the app's R2 bucket (npm run publish:data), served by the Worker under /view/, so
+// a deploy from git (which holds no data) still finds it. Locally, pipeline/web.sh stages a copy at the same path.
 // ponytail: the manifest comes from this site; Phase 4 reads the sha256 from the app's record on chain.
-const MANIFEST = "bundle/us-ms.json";
+const DATA = "view/regions/";
+const MANIFEST = `${DATA}us-ms.json`;
 const enc = new TextEncoder(), dec = new TextDecoder();
 let wasm;
 
@@ -52,7 +55,7 @@ async function load() {
   if (!res.ok) throw new Error(`Could not load the map manifest (HTTP ${res.status}).`);
   const manifest = await res.json();
   const [gz, code] = await Promise.all([
-    download(`bundle/${manifest.file}`, manifest.bytes),
+    download(`${DATA}${manifest.file}`, manifest.bytes),
     fetch("quest.wasm").then((r) => r.arrayBuffer()),
   ]);
   const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", gz))]

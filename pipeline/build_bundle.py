@@ -8,7 +8,7 @@ the graph, the edge bearings (for turn instructions) and (edge, fraction) for ev
 The output is deterministic, so the same inputs give the same sha256.
 """
 import argparse, array, glob, gzip, hashlib, json, math, re, struct, sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -285,17 +285,27 @@ def read_tiger(paths):
 
 
 def read_places(path, points):
-    places = defaultdict(set)
+    """Town name -> its ZIPs, strongest first: the Census's ZIP/place pairs by the land they share, and for
+    towns the Census doesn't list (unincorporated communities), OSM addresses' city/ZIP pairs seen 3+ times.
+    OSM's pairs are noisy: one address tagged "Pontotoc" with another town's ZIP must not make it Pontotoc's."""
+    overlap = defaultdict(lambda: defaultdict(int))
     with open(path, encoding="utf-8-sig") as f:
         next(f)
         for line in f:
             c = line.rstrip("\n").split("|")
             if c[1] and c[9].startswith("28"):
-                places[normalize(re.sub(r" (city|town|village|CDP)$", "", c[10]))].add(int(c[1]))
+                name = normalize(re.sub(r" (city|town|village|CDP)$", "", c[10]))
+                overlap[name][int(c[1])] += int(c[16] or 0)
+    osm = defaultdict(Counter)
     for _, _, z, city, *_ in points:
         if city and z[:5].isdigit():
-            places[normalize(city)].add(int(z[:5]))
-    return {k: sorted(v) for k, v in sorted(places.items())}
+            osm[normalize(city)][int(z[:5])] += 1
+    places = {name: [z for z, _ in sorted(zs.items(), key=lambda kv: (-kv[1], kv[0]))] for name, zs in overlap.items()}
+    for name, zs in osm.items():
+        keep = [z for z, n in sorted(zs.items(), key=lambda kv: (-kv[1], kv[0])) if n >= 3]
+        if name not in places and keep:
+            places[name] = keep
+    return dict(sorted(places.items()))
 
 
 DTYPE = {"i": "int32", "I": "uint32", "f": "float32", "B": "uint8", "H": "uint16"}
@@ -362,7 +372,16 @@ def main():
             res_skipped += 1
 
     # TIGER ranges onto OSM edges: sample each line every ~50 m and snap the samples.
-    tiger_paths = sorted(glob.glob(str(raw / "tiger" / f"tl_{a.tiger_year}_*_addrfeat.zip")))
+    # The newest year on disk for each county, up to --tiger-year (fetch.sh falls back a year when refused).
+    newest = {}
+    for path in sorted(glob.glob(str(raw / "tiger" / "tl_*_*_addrfeat.zip"))):
+        year, county = Path(path).name.split("_")[1:3]
+        if int(year) <= int(a.tiger_year) and year >= newest.get(county, ("0",))[0]:
+            newest[county] = (year, path)
+    tiger_paths = [path for _, path in sorted(newest.values(), key=lambda yp: yp[1])]
+    tiger_stand_ins = {c: int(y) for c, (y, _) in sorted(newest.items()) if y != str(a.tiger_year)}
+    if tiger_stand_ins:
+        print(f"  tiger: older years standing in for {tiger_stand_ins}", flush=True)
     lines, ranges, rng_dropped = read_tiger(tiger_paths)
     used = {r[0] for r in ranges}
     pieces, piece_of = [], {}
@@ -466,7 +485,8 @@ def main():
     raw_len, gz = write_bundle(out, header, arrays)
     manifest = {
         "region": a.region, "file": out.name, "bytes": len(gz), "sha256": hashlib.sha256(gz).hexdigest(),
-        "osm_date": osm_date, "tiger_year": int(a.tiger_year),
+        "osm_date": osm_date, "tiger_year": int(a.tiger_year), "tiger_counties": len(tiger_paths),
+        "tiger_stand_ins": tiger_stand_ins,
         "counts": {"junctions": len(order), "edges": len(edges), "restrictions": len(res),
                    "restrictions_skipped": res_skipped, "tiger_lines": len(used), "tiger_lines_unmatched":
                    len(used) - len(piece_of), "ranges": len(rng), "ranges_unmatched": rng_unmatched,

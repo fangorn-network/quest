@@ -1,0 +1,2 @@
+# The staged bundle (pipeline/web.sh) is for local viewing; live, the Worker serves /view/ from R2.
+view/

@@ -11,10 +11,20 @@ mkdir -p "$RAW/tiger"
 [ -s "$RAW/mississippi.osm.pbf" ] || curl -fL -o "$RAW/mississippi.osm.pbf" \
   https://download.geofabrik.de/north-america/us/mississippi-latest.osm.pbf
 
-# TIGER house-number ranges, one zip per county.
-base=https://www2.census.gov/geo/tiger/TIGER$TIGER_YEAR/ADDRFEAT
-for f in $(curl -fs --http1.1 --retry 3 "$base/" | grep -o "tl_${TIGER_YEAR}_${STATE_FIPS}[0-9]*_addrfeat.zip" | sort -u); do
-  [ -s "$RAW/tiger/$f" ] || { curl -fs --http1.1 --retry 3 -o "$RAW/tiger/$f.part" "$base/$f" && unzip -tq "$RAW/tiger/$f.part" >/dev/null && mv "$RAW/tiger/$f.part" "$RAW/tiger/$f" || { rm -f "$RAW/tiger/$f.part"; echo "failed: $f (the Census site may be rate limiting; rerun later)" >&2; }; }
+# TIGER house-number ranges, one zip per county. A zip is kept only if it tests whole: the Census site
+# answers some requests with a 200 "Request Rejected" page.
+get() { curl -fs --http1.1 --retry 3 -o "$2.part" "$1" && unzip -tq "$2.part" >/dev/null && mv "$2.part" "$2" || { rm -f "$2.part"; false; }; }
+tiger=https://www2.census.gov/geo/tiger
+for f in $(curl -fs --http1.1 --retry 3 "$tiger/TIGER$TIGER_YEAR/ADDRFEAT/" | grep -o "tl_${TIGER_YEAR}_${STATE_FIPS}[0-9]*_addrfeat.zip" | sort -u); do
+  [ -s "$RAW/tiger/$f" ] || get "$tiger/TIGER$TIGER_YEAR/ADDRFEAT/$f" "$RAW/tiger/$f" && continue
+  # Refused (its firewall has rejected one county's current file for days): the year before stands in until
+  # a rerun gets the current one. The build uses the newest year on disk per county and lists stand-ins.
+  prev="${f/_${TIGER_YEAR}_/_$((TIGER_YEAR - 1))_}"
+  if [ -s "$RAW/tiger/$prev" ] || get "$tiger/TIGER$((TIGER_YEAR - 1))/ADDRFEAT/$prev" "$RAW/tiger/$prev"; then
+    echo "refused: $f; using $prev until a rerun gets it" >&2
+  else
+    echo "failed: $f and $prev (rerun later)" >&2
+  fi
 done
 
 # ZIP code -> Census place names, so "Jackson, MS" narrows to Jackson's ZIPs.

@@ -4,8 +4,7 @@ node_modules/
 .venv/
 __pycache__/
 core/target/
-web/quest.wasm
-web/bundle/
+web/view/
 
 # Secrets, should any tool ever write them here (the wallet key lives in ~/.fangorn, the Cloudflare login in ~/.config).
 .env

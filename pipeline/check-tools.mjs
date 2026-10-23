@@ -1,12 +1,12 @@
 // Every WebMCP tool, called the way an agent would: node pipeline/check-tools.mjs
-// Loads web/quest.wasm and the staged bundle (npm run build:web first), captures registerAgent's tools with a
+// Loads web/quest.wasm and the staged bundle in web/view/regions (npm run build:web first), captures registerAgent's tools with a
 // stub document.modelContext, runs one sample call per tool and one that must miss. Exit 1 on any failure.
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { actions, registerAgent } from "../web/agent.js";
 
 const web = new URL("../web/", import.meta.url);
-const manifest = JSON.parse(readFileSync(new URL("bundle/us-ms.json", web)));
+const manifest = JSON.parse(readFileSync(new URL("view/regions/us-ms.json", web)));
 const { instance } = await WebAssembly.instantiate(readFileSync(new URL("quest.wasm", web)), {});
 const w = instance.exports, enc = new TextEncoder(), dec = new TextDecoder();
 const reply = (p) => {
@@ -20,7 +20,7 @@ const copyIn = (bytes) => {
   new Uint8Array(w.memory.buffer, p, bytes.length).set(bytes);
   return p;
 };
-const raw = gunzipSync(readFileSync(new URL(`bundle/${manifest.file}`, web)));
+const raw = gunzipSync(readFileSync(new URL(`view/regions/${manifest.file}`, web)));
 const loaded = reply(w.quest_load(copyIn(raw), raw.length));
 if (loaded.error) throw new Error(loaded.error);
 

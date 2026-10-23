@@ -93,3 +93,11 @@ fn one_answer_per_place() {
     assert_eq!(found.len(), 1, "{:?}", found.iter().map(|l| &l.label).collect::<Vec<_>>());
     assert_eq!(found[0].quality, "exact");
 }
+
+#[test]
+fn a_town_prefers_its_own_zip() {
+    let Some(q) = quest() else { return eprintln!("no bundle, skipped") };
+    // Pontotoc is ZIP 38863; stray OSM addresses tagged "Pontotoc" with 38663 (Ripley) must not come first.
+    let top = &q.geocode("100 N Main St, Pontotoc MS", 5)[0];
+    assert!(top.label.ends_with("38863"), "{}", top.label);
+}

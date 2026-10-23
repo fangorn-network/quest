@@ -6,11 +6,13 @@
     "deploy": "wrangler deploy",
     "build:data": "pipeline/fetch.sh && .venv/bin/python pipeline/build_bundle.py",
     "build:web": "pipeline/web.sh",
-    "view": "npm run build:web && echo 'quest at http://127.0.0.1:8787/' && python3 -m http.server 8787 --bind 127.0.0.1 --directory web"
+    "view": "npm run build:web && echo 'quest at http://127.0.0.1:8787/' && python3 -m http.server 8787 --bind 127.0.0.1 --directory web",
+    "publish:data": "pipeline/publish-data.sh"
   },
   "dependencies": {
     "@fangorn-network/westmarch": "2026.10.2-2.0-dev",
     "@huggingface/transformers": "^4.3.1",
     "wrangler": "^4.83.0"
-  },"name": "quest"
+  },
+  "name": "quest"
 }
