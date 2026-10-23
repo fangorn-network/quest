@@ -305,7 +305,13 @@ def read_places(path, points):
         keep = [z for z, n in sorted(zs.items(), key=lambda kv: (-kv[1], kv[0])) if n >= 3]
         if name not in places and keep:
             places[name] = keep
-    return dict(sorted(places.items()))
+    # Each ZIP's name for labels: the town it shares the most land with (38801 is Tupelo, not Plantersville).
+    best = {}
+    for name, zs in overlap.items():
+        for z, area in zs.items():
+            if area > best.get(z, ("", -1))[1] or (area == best[z][1] and name < best[z][0]):
+                best[z] = (name, area)
+    return dict(sorted(places.items())), {str(z): name for z, (name, _) in sorted(best.items())}
 
 
 DTYPE = {"i": "int32", "I": "uint32", "f": "float32", "B": "uint8", "H": "uint16"}
@@ -435,7 +441,7 @@ def main():
             pt_dropped += 1
     pts_out.sort()
 
-    places = read_places(raw / "zcta_place.txt", points)
+    places, zip_places = read_places(raw / "zcta_place.txt", points)
     e_b = [end_bearings(e[2]) for e in edges]
     # Road shapes for the map: each edge's interior points, simplified to within 5 m, each stored as the
     # step from the point before it (the first from the edge's u), which compresses a quarter smaller.
@@ -454,6 +460,7 @@ def main():
         "attribution": "© OpenStreetMap contributors (ODbL); US Census Bureau TIGER/Line",
         "classes": CLASSES, "flags": {"oneway": ONEWAY, "roundabout": ROUNDABOUT},
         "parity": ["", "odd", "even", "both"], "names": names, "streets": streets, "places": places,
+        "zip_places": zip_places,
     }
     arrays = [
         ("node_lat", "i", [round(coords[n][0] * 1e7) for n in order]),

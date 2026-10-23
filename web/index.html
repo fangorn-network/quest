@@ -20,12 +20,16 @@
   <form id="trip" class="no-print" novalidate>
     <div class="field">
       <label for="from">From</label>
-      <input id="from" name="from" autocomplete="street-address" placeholder="400 High St, Jackson MS" required>
+      <input id="from" name="from" autocomplete="off" placeholder="400 High St, Jackson MS" required
+             role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="from-list">
+      <ul id="from-list" class="suggest" role="listbox" aria-label="Suggestions" hidden></ul>
       <div class="choices" id="from-choices" aria-live="polite"></div>
     </div>
     <div class="field">
       <label for="to">To</label>
-      <input id="to" name="to" autocomplete="off" placeholder="306 Elvis Presley Dr, Tupelo" required>
+      <input id="to" name="to" autocomplete="off" placeholder="306 Elvis Presley Dr, Tupelo" required
+             role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="to-list">
+      <ul id="to-list" class="suggest" role="listbox" aria-label="Suggestions" hidden></ul>
       <div class="choices" id="to-choices" aria-live="polite"></div>
     </div>
     <div class="actions">

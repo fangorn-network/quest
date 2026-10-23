@@ -101,3 +101,25 @@ fn a_town_prefers_its_own_zip() {
     let top = &q.geocode("100 N Main St, Pontotoc MS", 5)[0];
     assert!(top.label.ends_with("38863"), "{}", top.label);
 }
+
+#[test]
+fn suggests_while_typing() {
+    let Some(q) = quest() else { return eprintln!("no bundle, skipped") };
+    let labels = |s: &str| q.suggest(s, 6).into_iter().map(|l| l.label).collect::<Vec<_>>();
+    // A half-typed town, or a whole one, narrows to 400 High St, Jackson.
+    for typed in ["400 High St, Jack", "400 high st jackson", "400 High S, Jackson"] {
+        assert!(labels(typed).iter().any(|l| l == "400 High St, Jackson, MS 39201"), "{typed}: {:?}", labels(typed));
+    }
+    // A half-typed suffix ("Str" before it becomes "St") still means High St, in whichever towns have one.
+    let high = labels("400 High Str");
+    assert!(!high.is_empty() && high.iter().all(|l| l.starts_with("400 High St,")), "{high:?}");
+    // No number yet: the street, once per town.
+    let mains = labels("Main St");
+    assert!(mains.len() > 3 && mains.iter().all(|l| l.starts_with("Main St")), "{mains:?}");
+    // Too little to go on, or nothing like it: no suggestions, not an error.
+    assert!(labels("4").is_empty() && labels("zzzz qqqq").is_empty());
+    // With no town typed, a ZIP is named for its main town: 38801 is Tupelo, though Plantersville shares it.
+    assert_eq!(labels("306 Elvis Pres")[0], "306 Elvis Presley Drive, Tupelo, MS 38801");
+    // A whole address searched normally is unchanged by suggest mode.
+    assert_eq!(q.geocode("400 High St, Jackson MS 39201", 1)[0].label, "400 High St, Jackson, MS 39201");
+}

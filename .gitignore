@@ -16,3 +16,4 @@ web/view/
 # Local tool state: wrangler dev's cache, and the Fangorn CLI's per-machine repo head (the truth is on chain).
 .wrangler/
 .fangorn/
+meta/*

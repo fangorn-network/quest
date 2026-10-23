@@ -196,9 +196,60 @@ $("trip").addEventListener("submit", async (ev) => {
   }
 });
 
-for (const side of ["from", "to"]) {
-  $(side).addEventListener("input", () => { chosen[side] = null; $(`${side}-choices`).replaceChildren(); });
+// ---- Suggestions under each field as the person types: quest-core in the worker, so nothing leaves the tab. ----
+// An ARIA combobox: arrows move, Enter picks, Escape closes; picking locks in that exact place.
+function combobox(side) {
+  const input = $(side), list = $(`${side}-list`);
+  let items = [], active = -1, seq = 0, timer;
+  const highlight = (i) => {
+    active = i;
+    [...list.children].forEach((li, k) => li.setAttribute("aria-selected", String(k === i)));
+    if (i < 0) return input.removeAttribute("aria-activedescendant");
+    input.setAttribute("aria-activedescendant", list.children[i].id);
+    list.children[i].scrollIntoView({ block: "nearest" });
+  };
+  const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); highlight(-1); };
+  const pick = (loc) => { chosen[side] = loc; input.value = loc.label; $(`${side}-choices`).replaceChildren(); close(); };
+  const open = (matches) => {
+    items = matches;
+    list.replaceChildren(...matches.map((m, i) => {
+      const li = Object.assign(document.createElement("li"), { id: `${side}-opt-${i}`, textContent: m.label });
+      li.setAttribute("role", "option");
+      li.addEventListener("pointerdown", (e) => { e.preventDefault(); pick(m); }); // before the input loses focus
+      return li;
+    }));
+    list.hidden = !matches.length;
+    input.setAttribute("aria-expanded", String(matches.length > 0));
+    highlight(-1);
+  };
+  input.addEventListener("input", () => {
+    chosen[side] = null;
+    $(`${side}-choices`).replaceChildren();
+    clearTimeout(timer);
+    const mine = ++seq, text = input.value.trim();
+    if (text.length < 3 || !meta) return close();
+    timer = setTimeout(async () => {
+      const found = await actions.findAddress(ctx, { address: text, limit: 6, partial: true });
+      if (mine === seq && document.activeElement === input) open(found.error ? [] : found); // the latest keystroke only
+    }, 120);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (list.hidden) {
+      if (e.key === "ArrowDown" && items.length && !chosen[side]) { open(items); highlight(0); e.preventDefault(); }
+      return;
+    }
+    if (e.key === "ArrowDown") highlight((active + 1) % items.length);
+    else if (e.key === "ArrowUp") highlight(active <= 0 ? items.length - 1 : active - 1);
+    else if (e.key === "Enter" && active >= 0) pick(items[active]);
+    else if (e.key === "Enter") return close(); // nothing highlighted: close, and the form submits
+    else if (e.key === "Escape") close();
+    else return; // typing: the input handler refreshes the list
+    e.preventDefault();
+  });
+  input.addEventListener("blur", close);
 }
+combobox("from");
+combobox("to");
 
 $("swap").addEventListener("click", () => {
   [$("from").value, $("to").value] = [$("to").value, $("from").value];

@@ -19,7 +19,13 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 var(--
 a { color: var(--accent); }
 
 form { display: grid; gap: 12px; margin: 20px 0 8px; }
+.field { position: relative; }
 .field label { display: block; font-weight: 600; margin-bottom: 4px; }
+.suggest { position: absolute; left: 0; right: 0; z-index: 5; margin: 2px 0 0; padding: 4px 0; list-style: none;
+  max-height: 18rem; overflow: auto; background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: 0 6px 18px rgb(0 0 0 / 0.18); }
+.suggest li { padding: 8px 12px; cursor: pointer; }
+.suggest li:hover, .suggest li[aria-selected="true"] { background: var(--mark); }
 input { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius);
   background: var(--bg); color: var(--fg); }
 input:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

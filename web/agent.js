@@ -18,10 +18,11 @@ const PLACE = (which) => ({
 });
 
 export const actions = {
-  /** Mississippi addresses matching free text, best first. */
-  async findAddress(ctx, { address, limit = 5 }) {
+  /** Mississippi addresses matching free text, best first. `partial`: the text is still being typed, so the
+   *  last word and the town match by prefix (the page's suggestions as someone types). */
+  async findAddress(ctx, { address, limit = 5, partial = false }) {
     const n = Math.min(20, Math.max(1, Math.trunc(Number(limit) || 5)));
-    const { matches, error } = await ctx.ask({ fn: "geocode", q: String(address ?? ""), limit: n });
+    const { matches, error } = await ctx.ask({ fn: partial ? "suggest" : "geocode", q: String(address ?? ""), limit: n });
     return error ? { error } : matches;
   },
 
@@ -58,7 +59,7 @@ export function registerAgent(ctx) {
   if (!mc?.registerTool) return; // most browsers have no WebMCP yet
   mc.registerTool({
     name: "find-quest-address",
-    description: "Find Mississippi street addresses matching text, best first. Each match has a label and a quality: "
+    description: "Find Mississippi street addresses matching text, best first (partial: true for text still being typed). Each match has a label and a quality: "
       + "exact (a mapped address), interpolated (placed along its block) or approximate (number not found; nearest block). "
       + "Pass a match as from/to in get-quest-directions when text is ambiguous. Runs on this device; nothing is sent anywhere.",
     inputSchema: {
@@ -66,6 +67,8 @@ export function registerAgent(ctx) {
       properties: {
         address: { type: "string", minLength: 3, description: "Street address, with a town or ZIP code if known." },
         limit: { type: "integer", minimum: 1, maximum: 20, default: 5 },
+        partial: { type: "boolean", default: false,
+                   description: "The text is still being typed: match its last word and town by prefix, as the page's suggestions do." },
       },
       required: ["address"],
     },

@@ -38,6 +38,8 @@ struct Header {
     names: Vec<String>,
     streets: Vec<(String, String)>,
     places: HashMap<String, Vec<u32>>,
+    #[serde(default)]
+    zip_places: HashMap<String, String>,
     arrays: Vec<ArrayInfo>,
 }
 
@@ -58,6 +60,8 @@ pub struct Bundle {
     pub names: Vec<String>,
     pub streets: Vec<(String, String)>,
     pub places: HashMap<String, Vec<u32>>,
+    /// Each ZIP's town for labels: the one sharing the most land with it.
+    pub zip_places: HashMap<u32, String>,
     pub node_lat: Vec<i32>,
     pub node_lon: Vec<i32>,
     pub edge_u: Vec<u32>,
@@ -158,6 +162,7 @@ impl Bundle {
             names: h.names,
             streets: h.streets,
             places: h.places,
+            zip_places: h.zip_places.into_iter().filter_map(|(z, n)| Some((z.parse().ok()?, n))).collect(),
             node_lat,
             node_lon: arr!(node_lon),
             edge_u,
@@ -269,18 +274,25 @@ impl Quest {
         self.geocoder.search(&self.bundle, query, limit)
     }
 
+    /// Matches for an address still being typed, for suggestions under a text box.
+    pub fn suggest(&self, query: &str, limit: usize) -> Vec<Location> {
+        self.geocoder.suggest(&self.bundle, query, limit)
+    }
+
     pub fn route(&self, from: &Location, to: &Location) -> Option<Route> {
         self.graph.route(&self.bundle, from, to)
     }
 
     /// One JSON request -> one JSON response; the whole ABI surface.
-    /// `{"fn":"geocode","q":"...","limit":5}`, `{"fn":"route","from":Location,"to":Location}`, or
+    /// `{"fn":"geocode","q":"...","limit":5}`, `{"fn":"suggest","q":"400 High S","limit":6}`,
+    /// `{"fn":"route","from":Location,"to":Location}`, or
     /// `{"fn":"map", ...MapRequest}`.
     pub fn call(&self, request: &str) -> String {
         #[derive(Deserialize)]
         #[serde(tag = "fn", rename_all = "lowercase")]
         enum Req {
             Geocode { q: String, limit: Option<usize> },
+            Suggest { q: String, limit: Option<usize> },
             Route { from: Location, to: Location },
             Map(MapRequest),
             Meta,
@@ -288,6 +300,7 @@ impl Quest {
         let out = match serde_json::from_str::<Req>(request) {
             Err(e) => serde_json::json!({ "error": format!("bad request: {e}") }),
             Ok(Req::Geocode { q, limit }) => serde_json::json!({ "matches": self.geocode(&q, limit.unwrap_or(5).min(20)) }),
+            Ok(Req::Suggest { q, limit }) => serde_json::json!({ "matches": self.suggest(&q, limit.unwrap_or(6).min(20)) }),
             Ok(Req::Route { from, to }) => match self.route(&from, &to) {
                 Some(r) => serde_json::json!({ "route": r }),
                 None => serde_json::json!({ "error": "no drivable route between these points" }),
