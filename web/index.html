@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>quest: private directions</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="bar">
+  <h1>quest</h1>
+  <p>Printable driving directions for Mississippi. Addresses are looked up and routed on this device; nothing you type is sent anywhere.</p>
+</header>
+
+<main>
+  <form id="trip" class="no-print" novalidate>
+    <div class="field">
+      <label for="from">From</label>
+      <input id="from" name="from" autocomplete="street-address" placeholder="400 High St, Jackson MS" required>
+      <div class="choices" id="from-choices" aria-live="polite"></div>
+    </div>
+    <div class="field">
+      <label for="to">To</label>
+      <input id="to" name="to" autocomplete="off" placeholder="306 Elvis Presley Dr, Tupelo" required>
+      <div class="choices" id="to-choices" aria-live="polite"></div>
+    </div>
+    <div class="actions">
+      <button type="submit" id="go" disabled>Get directions</button>
+      <button type="button" id="swap">Swap</button>
+    </div>
+  </form>
+
+  <p id="status" class="status no-print" role="status" aria-live="polite">Loading Mississippi map data…</p>
+
+  <figure class="map">
+    <div id="map" class="map-view" tabindex="0" role="region"
+         aria-label="Map. Drag or use the arrow keys to move; plus and minus to zoom."></div>
+    <div class="map-controls no-print">
+      <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+      <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+      <button type="button" id="zoom-fit" aria-label="Fit the map to the route">Fit</button>
+    </div>
+  </figure>
+
+  <section id="result" hidden aria-labelledby="result-title">
+    <h2 id="result-title" tabindex="-1">Driving directions</h2>
+    <dl class="trip">
+      <dt>From</dt><dd id="r-from"></dd>
+      <dt>To</dt><dd id="r-to"></dd>
+      <dt>Total</dt><dd id="r-total"></dd>
+    </dl>
+    <table class="steps">
+      <thead><tr><th scope="col">#</th><th scope="col">Direction</th><th scope="col" class="num">Distance</th></tr></thead>
+      <tbody id="r-steps"></tbody>
+    </table>
+    <p class="note">Computed on your device on <span id="r-date"></span> from map data dated <span id="r-data"></span>. Roads change; follow posted signs.</p>
+    <button type="button" id="print" class="no-print">Print directions</button>
+  </section>
+</main>
+
+<footer class="credit">
+  Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL) and US Census Bureau TIGER/Line.
+</footer>
+</body>
+</html>

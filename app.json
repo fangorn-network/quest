@@ -1,16 +1,19 @@
 {
- "app": "my-app",
- "name": "my-app",
- "description": "One sentence: what is in here, and who it is for.",
+ "app": "quest",
+ "name": "quest",
+ "description": "Printable driving directions for Mississippi, found and routed in your browser from OpenStreetMap and US Census data: the addresses you type never leave your device.",
  "network": "baseSepolia",
+ "fromBlock": 48884613,
  "site": {
-  "project": "my-app",
+  "project": "quest",
+  "pages": "web",
+  "agent": "web/agent.js",
   "examples": []
  },
- "tags": [],
+ "tags": ["directions", "maps", "privacy", "mississippi"],
  "types": {
-  "my-app.item.v1": {
-   "description": "One item: what a record is, in the words a searcher would use.",
+  "quest.region.v1": {
+   "description": "One region's map data for private, on-device directions: a bundle of roads and addresses, its size, its sha256 and where to download it.",
    "role_map": {
     "identity": "id",
     "title": "title",
@@ -18,7 +21,7 @@
     "text": ["text"]
    },
    "presentation": {
-    "types": { "my-app.item.v1": { "singular": "item", "plural": "items" } },
+    "types": { "quest.region.v1": { "singular": "region", "plural": "regions" } },
     "facets": ["tags"]
    }
   }

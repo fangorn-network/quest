@@ -1,0 +1,19 @@
+.ship/*
+!.ship/state.json
+node_modules/
+.venv/
+__pycache__/
+core/target/
+web/quest.wasm
+web/bundle/
+
+# Secrets, should any tool ever write them here (the wallet key lives in ~/.fangorn, the Cloudflare login in ~/.config).
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+# Local tool state: wrangler dev's cache, and the Fangorn CLI's per-machine repo head (the truth is on chain).
+.wrangler/
+.fangorn/

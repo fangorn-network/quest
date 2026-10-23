@@ -1,0 +1,23 @@
+{
+  "_": "Street-name normalization, shared by pipeline/build_bundle.py and the page so a typed name and a stored name meet in the same form. Uppercase, strip punctuation, then rewrite the patterns in order, then map each token.",
+  "patterns": [
+    ["\\bU S\\b", "US"],
+    ["\\b(INTERSTATE|I)( HWY| HIGHWAY)? (\\d+)\\b", "I $3"],
+    ["\\bUS (HWY |HIGHWAY |ROUTE |RTE )?(\\d+)\\b", "US $2"],
+    ["\\b(STATE|MS|MISSISSIPPI) (HWY |HIGHWAY |ROUTE |RTE )?(\\d+)\\b", "MS $3"],
+    ["\\b(SR) (\\d+)\\b", "MS $2"],
+    ["\\b(COUNTY|CO) (RD|ROAD) (\\d+)\\b", "CO RD $3"],
+    ["\\bCR (\\d+)\\b", "CO RD $1"],
+    ["\\b(HIGHWAY|HWY) (\\d+)\\b", "HWY $2"]
+  ],
+  "tokens": {
+    "NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W",
+    "NORTHEAST": "NE", "NORTHWEST": "NW", "SOUTHEAST": "SE", "SOUTHWEST": "SW",
+    "STREET": "ST", "AVENUE": "AVE", "AV": "AVE", "ROAD": "RD", "DRIVE": "DR", "LANE": "LN",
+    "BOULEVARD": "BLVD", "COURT": "CT", "CIRCLE": "CIR", "PLACE": "PL", "PARKWAY": "PKWY",
+    "HIGHWAY": "HWY", "TRAIL": "TRL", "TERRACE": "TER", "COVE": "CV", "EXTENSION": "EXT",
+    "SQUARE": "SQ", "LOOP": "LOOP", "POINT": "PT", "CROSSING": "XING", "EXPRESSWAY": "EXPY",
+    "FREEWAY": "FWY", "MOUNT": "MT", "SAINT": "ST", "FORT": "FT", "COUNTY": "CO",
+    "CENTER": "CTR", "HEIGHTS": "HTS", "RIDGE": "RDG", "SPRINGS": "SPGS", "MEADOWS": "MDWS"
+  }
+}

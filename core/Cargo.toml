@@ -1,0 +1,22 @@
+[package]
+name = "quest-core"
+version = "0.1.0"
+edition = "2021"
+description = "Private on-device geocoding and routing over a quest bundle"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+flate2 = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
