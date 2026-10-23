@@ -171,9 +171,9 @@ class Grid:
     def key(self, deg):
         return math.floor(deg / self.CELL)
 
-    def snap(self, lat, lon, names, keys, maxd):
+    def snap(self, lat, lon, names, keys, maxd, near=40):
         """Nearest edge to (lat, lon): one whose name is in `names` if any lies within maxd,
-        else the nearest within min(maxd, 40 m). Returns (edge, t) or None."""
+        else the nearest within min(maxd, near) m. Returns (edge, t) or None."""
         kx, ky = math.cos(math.radians(lat)) * 111320, 110540
         r = math.ceil(maxd / 45)
         cx, cy = self.key(lat), self.key(lon)
@@ -193,19 +193,51 @@ class Grid:
                     hit = (d, e, (c[k - 1] + u * (c[k] - c[k - 1])) / c[-1] if c[-1] else 0.0)
                     if d <= maxd and keys[e] & names and (best_named is None or hit < best_named):
                         best_named = hit
-                    if d <= min(maxd, 40) and (best is None or hit < best):
+                    if d <= min(maxd, near) and (best is None or hit < best):
                         best = hit
         hit = best_named or best
         return (hit[1], hit[2]) if hit else None
 
 
+CATS = json.loads((HERE / "categories.json").read_text())
+PLACE_KEYS = ("shop", "amenity", "tourism", "office", "craft", "healthcare", "leisure")
+OSM_KIND = {tag: kind for kind, c in CATS["kinds"].items() for tag in c["osm"]}
+OVERTURE_KIND = {cat: kind for kind, c in CATS["kinds"].items() for cat in c["overture"]}
+# OSM amenities and leisure that are furniture or infrastructure, not places anyone drives to by name.
+OSM_SKIP = {"parking", "parking_space", "parking_entrance", "bench", "waste_basket", "toilets", "drinking_water",
+            "fire_hydrant", "shelter", "bicycle_parking", "vending_machine", "post_box", "telephone", "recycling",
+            "loading_dock", "waste_disposal", "grave_yard", "hunting_stand", "picnic_table", "fountain", "clock",
+            "pitch", "swimming_pool", "playground", "garden", "track", "slipway", "firepit"}
+
+
+def humanize(cat):
+    return (cat or "").replace("_", " ")
+
+
+def osm_place(t):
+    """(tag, kind) for a named OSM object worth driving to, else None."""
+    k = next((k for k in PLACE_KEYS if k in t), None)
+    if not k or "name" not in t or t[k] in OSM_SKIP:
+        return None
+    tag = f"{k}={t[k]}"
+    return tag, OSM_KIND.get(tag)
+
+
 def read_osm(pbf):
     import osmium
-    ways, points, restrictions = [], [], []
+    ways, points, restrictions, places = [], [], [], []
     fp = osmium.FileProcessor(str(pbf)).with_locations().with_filter(
-        osmium.filter.KeyFilter("highway", "addr:housenumber", "type"))
+        osmium.filter.KeyFilter("highway", "addr:housenumber", "type", *PLACE_KEYS))
     for o in fp:
         t = o.tags
+        found = osm_place(t) if (o.is_node() or o.is_way()) else None
+        if found:
+            ll = [(o.lat, o.lon)] if o.is_node() else [(n.lat, n.lon) for n in o.nodes if n.location.valid()]
+            if ll:
+                street = " ".join(x for x in (t.get("addr:housenumber", ""), t.get("addr:street", "")) if x)
+                places.append({"name": t["name"], "cat": humanize(found[0].split("=")[1]), "kind": found[1],
+                               "street": street, "zip": t.get("addr:postcode", "")[:5], "src": 1,
+                               "lat": sum(p[0] for p in ll) / len(ll), "lon": sum(p[1] for p in ll) / len(ll)})
         if o.is_way() and drivable(t):
             nodes = [(n.ref, n.lat, n.lon) for n in o.nodes if n.location.valid()]
             if len(nodes) >= 2:
@@ -228,7 +260,104 @@ def read_osm(pbf):
                 and m["from"][0][0] == m["to"][0][0] == "w" and m["via"][0][0] == "n"
             restrictions.append((m["from"][0][1], m["via"][0][1], m["to"][0][1], int(kind.startswith("only_")))
                                 if ok else None)
-    return ways, points, restrictions
+    return ways, points, restrictions, places
+
+
+def read_overture(path):
+    """Overture's places worth routing to: not closed, confident (>= 0.6), and not in a skipped category
+    (home-based services, whose address is often a residence, and natural features), and not a counter inside
+    another business (money transfer desks in Walmarts duplicate the store)."""
+    import duckdb
+    rows = duckdb.connect().execute("""
+        SELECT name, basic_category, category, street, postcode, lat, lon, licenses FROM read_parquet(?)
+        WHERE name IS NOT NULL AND confidence >= 0.6 AND coalesce(operating_status, '') <> 'permanently_closed'
+          AND coalesce(basic_category, '') NOT IN (SELECT unnest(?::VARCHAR[]))
+          AND coalesce(category, '') NOT IN (SELECT unnest(?::VARCHAR[]))""",
+        [str(path), CATS["skip_overture"], CATS["skip_overture_detail"]]).fetchall()
+    licenses = defaultdict(int)
+    out = []
+    for name, basic, cat, street, postcode, lat, lon, lic in rows:
+        for x in lic or ():
+            licenses[x] += 1
+        out.append({"name": name, "cat": humanize(cat or basic), "kind": OVERTURE_KIND.get(basic or ""),
+                    "street": street or "", "zip": (postcode or "")[:5], "src": 2, "lat": lat, "lon": lon})
+    return out, dict(licenses)
+
+
+def edit_distance(a, b):
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def name_like(a, b):
+    """Two normalized names for one place: equal, one the other's first words ("TEXACO" / "TEXACO FLOWOOD"),
+    or a typo apart ("SUNCO" / "SUNOCO")."""
+    if a == b:
+        return True
+    short, long_ = sorted((a.split(), b.split()), key=len)
+    if short and long_[:len(short)] == short:
+        return True
+    n = min(len(a), len(b))
+    return n >= 4 and a[0] == b[0] and edit_distance(a, b) <= (1 if n < 8 else 2)
+
+
+# ponytail: the distances are judgement calls from Flowood's duplicates; tune them against real pairs.
+def same_place(p, q, d):
+    """Are places p and q, d metres apart, one place listed twice? Never across kinds (a Walmart and its
+    pharmacy stay two), nor across categories when neither has a kind."""
+    if p["kind"] != q["kind"] or (p["kind"] is None and p["cat"] != q["cat"]):
+        return False
+    if d < 100 and name_like(p["key"], q["key"]):
+        return True
+    if p["kind"] != "gas_station":
+        return False
+    # A gas station has its lot to itself, so (unlike a shopping centre's tenants, who share one address) the
+    # same address means the same station ("Marathon" and "Xtra Mile" at 105 Jacks Place), and so does being
+    # within 25 m: one forecourt listed under two brands. A listing with no address (usually OSM, whose brand
+    # tags go stale: the BP that is now Grants Ferry Marathon, 33 m off) is the station within 50 m. Stations
+    # on opposite corners, each with its address, stay two: 690 and 691 Grants Ferry Rd are 87 m apart.
+    if d < 25 or (d < 200 and p["skey"] and p["skey"] == q["skey"]):
+        return True
+    return d < 50 and not (p["street"] and q["street"])
+
+
+def dedupe_places(places):
+    """One entry per real place, across OSM and Overture and within each: see same_place. The entry kept is the
+    one with a street address, Overture's before OSM's. Returns (places, how many were duplicates)."""
+    for p in places:
+        p["key"], p["skey"] = normalize(p["name"]), normalize(p["street"])
+    order = sorted(places, key=lambda p: (not p["street"], p["src"] == 1))
+    cell = lambda p: (round(p["lat"] / 0.002), round(p["lon"] / 0.002))
+    kept, near = [], defaultdict(list)
+    for p in order:
+        cy, cx = cell(p)
+        twin = next((k for dy in (-1, 0, 1) for dx in (-1, 0, 1) for k in near.get((cy + dy, cx + dx), ())
+                     if same_place(p, kept[k], haversine((p["lat"], p["lon"]), (kept[k]["lat"], kept[k]["lon"])))), None)
+        if twin is None:
+            near[(cy, cx)].append(len(kept))
+            kept.append(p)
+        elif kept[twin]["src"] != p["src"]:
+            kept[twin] = {**kept[twin], "src": 3}
+    return kept, len(places) - len(kept)
+
+
+def read_towns(path):
+    """Town name -> [centre lat, lon (Census Gazetteer internal point), name as written, radius in m of a circle
+    with the town's land area], for "near Hattiesburg" and "in Flowood"."""
+    towns = {}
+    with open(path, encoding="utf-8") as f:
+        next(f)
+        for line in f:
+            c = [x.strip() for x in line.split("\t")]
+            shown = re.sub(r" (city|town|village|CDP)$", "", c[3])
+            radius = round(math.sqrt(float(c[6]) / math.pi))
+            towns.setdefault(normalize(shown), [round(float(c[10]), 6), round(float(c[11]), 6), shown, radius])
+    return dict(sorted(towns.items()))
 
 
 def build_graph(ways):
@@ -288,18 +417,21 @@ def read_places(path, points):
     """Town name -> its ZIPs, strongest first: the Census's ZIP/place pairs by the land they share, and for
     towns the Census doesn't list (unincorporated communities), OSM addresses' city/ZIP pairs seen 3+ times.
     OSM's pairs are noisy: one address tagged "Pontotoc" with another town's ZIP must not make it Pontotoc's."""
-    overlap = defaultdict(lambda: defaultdict(int))
+    overlap, display = defaultdict(lambda: defaultdict(int)), {}
     with open(path, encoding="utf-8-sig") as f:
         next(f)
         for line in f:
             c = line.rstrip("\n").split("|")
             if c[1] and c[9].startswith("28"):
-                name = normalize(re.sub(r" (city|town|village|CDP)$", "", c[10]))
+                shown = re.sub(r" (city|town|village|CDP)$", "", c[10])
+                name = normalize(shown)
+                display.setdefault(name, shown)
                 overlap[name][int(c[1])] += int(c[16] or 0)
     osm = defaultdict(Counter)
     for _, _, z, city, *_ in points:
         if city and z[:5].isdigit():
             osm[normalize(city)][int(z[:5])] += 1
+            display.setdefault(normalize(city), city)
     places = {name: [z for z, _ in sorted(zs.items(), key=lambda kv: (-kv[1], kv[0]))] for name, zs in overlap.items()}
     for name, zs in osm.items():
         keep = [z for z, n in sorted(zs.items(), key=lambda kv: (-kv[1], kv[0])) if n >= 3]
@@ -311,7 +443,8 @@ def read_places(path, points):
         for z, area in zs.items():
             if area > best.get(z, ("", -1))[1] or (area == best[z][1] and name < best[z][0]):
                 best[z] = (name, area)
-    return dict(sorted(places.items())), {str(z): name for z, (name, _) in sorted(best.items())}
+    zip_names = {str(z): display.get(name, name.title()) for z, (name, _) in sorted(best.items())}
+    return dict(sorted(places.items())), zip_names, {k: display[k] for k in sorted(places) if k in display}
 
 
 DTYPE = {"i": "int32", "I": "uint32", "f": "float32", "B": "uint8", "H": "uint16"}
@@ -341,12 +474,13 @@ def main():
     ap.add_argument("--out", default=".ship/bundle/us-ms.bin.gz")
     ap.add_argument("--region", default="us-ms")
     ap.add_argument("--tiger-year", default="2026")
+    ap.add_argument("--overture-release", default="2026-10-21.0")
     a = ap.parse_args()
     raw, out = Path(a.raw), Path(a.out)
     import osmium
     osm_date = osmium.io.Reader(str(raw / "mississippi.osm.pbf")).header().get("osmosis_replication_timestamp")
 
-    ways, points, restrictions = read_osm(raw / "mississippi.osm.pbf")
+    ways, points, restrictions, osm_places = read_osm(raw / "mississippi.osm.pbf")
     order, coords, index, edges = build_graph(ways)
     print(f"osm {osm_date}: {len(ways)} drivable ways -> {len(order)} junctions, {len(edges)} edges", flush=True)
 
@@ -441,7 +575,39 @@ def main():
             pt_dropped += 1
     pts_out.sort()
 
-    places, zip_places = read_places(raw / "zcta_place.txt", points)
+    places, zip_places, town_names = read_places(raw / "zcta_place.txt", points)
+
+    # Businesses and other places (OSM + Overture), each snapped to the road it is on: its address's street if
+    # one is within reach, else the nearest road. Most are within 60 m; the rest get up to 300 m.
+    overture, place_licenses = read_overture(raw / f"overture_places_{a.overture_release}.parquet")
+    biz_all, biz_dupes = dedupe_places(overture + osm_places)
+    kinds = list(CATS["kinds"])
+    cats, cat_ix, pnames, pname_ix, pstreets, pstreet_ix = [], {}, [], {}, [""], {"": 0}
+    def ix(table, index, value):
+        if value not in index:
+            index[value] = len(table)
+            table.append(value)
+        return index[value]
+    biz, biz_dropped = [], 0
+    for n, p in enumerate(biz_all):
+        street_name = re.sub(r"^\s*\d+[A-Za-z]?\s+", "", p["street"])
+        names_ = {normalize(street_name)} if street_name else set()
+        hit = grid.snap(p["lat"], p["lon"], names_, keys, 60, near=60) or grid.snap(p["lat"], p["lon"], names_, keys, 300, near=300)
+        if n % 25000 == 0:
+            print(f"  places {n}/{len(biz_all)}", flush=True)
+        if not hit:
+            biz_dropped += 1
+            continue
+        zip_ = int(p["zip"]) if p["zip"].isdigit() else edge_zip.get(hit[0], 0)
+        biz.append((p["name"], p["street"], kinds.index(p["kind"]) if p["kind"] else 255, p["cat"], *hit,
+                    round(p["lat"] * 1e7), round(p["lon"] * 1e7), zip_, p["src"]))
+    biz.sort()
+    biz = [(ix(pnames, pname_ix, b[0]), ix(pstreets, pstreet_ix, b[1]), b[2], ix(cats, cat_ix, b[3]), *b[4:]) for b in biz]
+    towns = read_towns(raw / "gaz_place.txt")
+    for key, (_, _, shown, _) in towns.items():
+        town_names.setdefault(key, shown)
+    town_radius = {k: v[3] for k, v in towns.items()}
+    towns = {k: v[:2] for k, v in towns.items()}
     e_b = [end_bearings(e[2]) for e in edges]
     # Road shapes for the map: each edge's interior points, simplified to within 5 m, each stored as the
     # step from the point before it (the first from the edge's u), which compresses a quarter smaller.
@@ -457,7 +623,12 @@ def main():
     bdeg = lambda d: round(d * 256 / 360) % 256
     header = {
         "format": 1, "region": a.region, "osm_date": osm_date, "tiger_year": int(a.tiger_year),
-        "attribution": "© OpenStreetMap contributors (ODbL); US Census Bureau TIGER/Line",
+        "attribution": "© OpenStreetMap contributors (ODbL); US Census Bureau TIGER/Line; places © Overture Maps "
+                       "Foundation (CDLA-Permissive-2.0; some sources Apache-2.0 or CC0-1.0)",
+        "licenses": {"odbl": "https://opendatacommons.org/licenses/odbl/1-0/",
+                     "cdla-permissive-2.0": "https://cdla.dev/permissive-2-0/",
+                     "overture": "https://docs.overturemaps.org/attribution/"},
+        "town_names": dict(sorted(town_names.items())), "kinds": kinds, "place_cats": cats, "place_names": pnames, "place_streets": pstreets, "towns": towns, "town_radius": town_radius,
         "classes": CLASSES, "flags": {"oneway": ONEWAY, "roundabout": ROUNDABOUT},
         "parity": ["", "odd", "even", "both"], "names": names, "streets": streets, "places": places,
         "zip_places": zip_places,
@@ -488,6 +659,11 @@ def main():
         ("pt_street", "I", [p[0] for p in pts_out]), ("pt_zip", "I", [p[1] for p in pts_out]),
         ("pt_number", "I", [p[2] for p in pts_out]), ("pt_edge", "I", [p[3] for p in pts_out]),
         ("pt_t", "f", [p[4] for p in pts_out]),
+        ("pl_name", "I", [b[0] for b in biz]), ("pl_street", "I", [b[1] for b in biz]),
+        ("pl_kind", "B", [b[2] for b in biz]), ("pl_cat", "H", [b[3] for b in biz]),
+        ("pl_edge", "I", [b[4] for b in biz]), ("pl_t", "f", [b[5] for b in biz]),
+        ("pl_lat", "i", [b[6] for b in biz]), ("pl_lon", "i", [b[7] for b in biz]),
+        ("pl_zip", "I", [b[8] for b in biz]), ("pl_src", "B", [b[9] for b in biz]),
     ]
     raw_len, gz = write_bundle(out, header, arrays)
     manifest = {
@@ -498,7 +674,12 @@ def main():
                    "restrictions_skipped": res_skipped, "tiger_lines": len(used), "tiger_lines_unmatched":
                    len(used) - len(piece_of), "ranges": len(rng), "ranges_unmatched": rng_unmatched,
                    "ranges_unparsed": rng_dropped, "pieces": len(pieces), "address_points": len(pts_out),
-                   "address_points_dropped": pt_dropped, "streets": len(streets), "places": len(places)},
+                   "address_points_dropped": pt_dropped, "streets": len(streets), "places": len(places),
+                   "businesses": len(biz), "businesses_osm_only": sum(b[9] == 1 for b in biz),
+                   "businesses_overture_only": sum(b[9] == 2 for b in biz), "businesses_in_both": sum(b[9] == 3 for b in biz),
+                   "businesses_duplicates_removed": biz_dupes,
+                   "businesses_unsnapped": biz_dropped, "towns": len(towns)},
+        "overture_release": a.overture_release, "overture_licenses": place_licenses,
     }
     out.with_suffix("").with_suffix(".json").write_text(json.dumps(manifest, indent=1) + "\n")
     print(json.dumps(manifest["counts"], indent=1))

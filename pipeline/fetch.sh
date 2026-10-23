@@ -31,5 +31,14 @@ done
 [ -s "$RAW/zcta_place.txt" ] || curl -fs --http1.1 --retry 3 -o "$RAW/zcta_place.txt" \
   https://www2.census.gov/geo/docs/maps-data/data/rel2020/zcta520/tab20_zcta520_place20_natl.txt
 
+# Town centre points (Census Gazetteer), so "gas stations near Hattiesburg" has somewhere to measure from.
+[ -s "$RAW/gaz_place.txt" ] || curl -fs --http1.1 --retry 3 -o "$RAW/gaz_place.txt" \
+  "https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2020_Gazetteer/2020_gaz_place_${STATE_FIPS}.txt"
+
+# Businesses and other places from Overture Maps (CDLA-Permissive-2.0), pinned to one release.
+OVERTURE_RELEASE=2026-10-21.0
+[ -s "$RAW/overture_places_$OVERTURE_RELEASE.parquet" ] || .venv/bin/python pipeline/fetch_overture.py \
+  "$OVERTURE_RELEASE" "$RAW/overture_places_$OVERTURE_RELEASE.parquet"
+
 ls "$RAW/tiger" | wc -l | xargs echo "tiger counties:"
 du -sh "$RAW"

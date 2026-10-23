@@ -16,6 +16,10 @@ pub struct MapRequest {
     pub route: Vec<[f64; 2]>,
     pub from: Option<[f64; 2]>,
     pub to: Option<[f64; 2]>,
+    /// Places search results, drawn as numbered pins in this order, and where they were searched near.
+    #[serde(default)]
+    pub pins: Vec<[f64; 2]>,
+    pub anchor: Option<[f64; 2]>,
 }
 
 #[derive(Serialize)]
@@ -202,11 +206,18 @@ impl Map {
         let (w, h) = (req.width.clamp(100.0, 4000.0), req.height.clamp(100.0, 4000.0));
         // The box to show: asked for, else the route plus a margin, else the region.
         let [mut s, mut west, mut n, mut e] = req.bbox.unwrap_or_else(|| {
-            if req.route.is_empty() {
+            // Fit the places found, where they were searched near and the trip's start (their distances are
+            // from it); else the route; else the region.
+            let fit: Vec<[f64; 2]> = if req.pins.is_empty() {
+                req.route.clone()
+            } else {
+                req.pins.iter().chain(&req.anchor).chain(&req.from).copied().collect()
+            };
+            if fit.is_empty() {
                 return self.region;
             }
             let mut bx = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-            for p in &req.route {
+            for p in &fit {
                 bx = [bx[0].min(p[0]), bx[1].min(p[1]), bx[2].max(p[0]), bx[3].max(p[1])];
             }
             let pad = ((bx[2] - bx[0]).max(bx[3] - bx[1]) * 0.08).max(0.002);
@@ -270,6 +281,7 @@ impl Map {
         let mut taken: Vec<[f64; 4]> = [req.from, req.to]
             .into_iter()
             .flatten()
+            .chain(req.pins.iter().copied())
             .map(|[la, lo]| {
                 let (x, y) = px(la, lo);
                 [x - 12.0, y - 12.0, x + 12.0, y + 12.0]
@@ -303,6 +315,20 @@ impl Map {
                     };
                 }
             }
+        }
+        if let Some([la, lo]) = req.anchor {
+            let (x, y) = px(la, lo);
+            let _ = write!(svg, r#"<circle class="m-anchor" cx="{x:.1}" cy="{y:.1}" r="6"/>"#);
+        }
+        // Pins last-numbered first, so number 1 is drawn on top where they overlap.
+        for (n, [la, lo]) in req.pins.iter().enumerate().rev() {
+            let (x, y) = px(*la, *lo);
+            let _ = write!(
+                svg,
+                r#"<g class="m-pin"><circle cx="{x:.1}" cy="{y:.1}" r="9"/><text x="{x:.1}" y="{:.1}">{}</text></g>"#,
+                y + 3.5,
+                n + 1
+            );
         }
         for (pt, class, label) in [(req.from, "m-start", "A"), (req.to, "m-end", "B")] {
             if let Some([la, lo]) = pt {

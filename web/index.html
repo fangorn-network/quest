@@ -40,6 +40,15 @@
 
   <p id="status" class="status no-print" role="status" aria-live="polite">Loading Mississippi map data…</p>
 
+  <form id="find" class="find no-print" role="search">
+    <label for="q">Find places</label>
+    <div class="find-row">
+      <input id="q" type="search" placeholder="Gas stations near Hattiesburg" autocomplete="off" enterkeyhint="search">
+      <button type="submit" id="find-go" disabled>Search</button>
+    </div>
+    <p id="find-status" class="find-status" role="status" aria-live="polite"></p>
+  </form>
+
   <figure class="map">
     <div id="map" class="map-view" tabindex="0" role="region"
          aria-label="Map. Drag or use the arrow keys to move; plus and minus to zoom."></div>
@@ -49,6 +58,8 @@
       <button type="button" id="zoom-fit" aria-label="Fit the map to the route">Fit</button>
     </div>
   </figure>
+
+  <ol id="place-list" class="place-list no-print" hidden aria-label="Places found"></ol>
 
   <section id="result" hidden aria-labelledby="result-title">
     <h2 id="result-title" tabindex="-1">Driving directions</h2>
@@ -68,6 +79,8 @@
 
 <footer class="credit">
   Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL) and US Census Bureau TIGER/Line.
+  Places © <a href="https://docs.overturemaps.org/attribution/">Overture Maps Foundation</a>
+  (<a href="https://cdla.dev/permissive-2-0/">CDLA Permissive 2.0</a>; some sources Apache 2.0 or CC0) and OpenStreetMap.
 </footer>
 </body>
 </html>

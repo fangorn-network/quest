@@ -1,5 +1,5 @@
 """Checks for the builder's pure parts: .venv/bin/python pipeline/test_build_bundle.py"""
-from build_bundle import haversine, house_fraction, locate, normalize, pieces_for, simplify
+from build_bundle import dedupe_places, haversine, house_fraction, locate, normalize, osm_place, pieces_for, simplify
 
 # Typed and stored forms of a name meet in one form.
 for a, b in [("North State Street", "N State St"), ("I-55", "I 55"), ("Interstate 55", "I- 55"),
@@ -33,5 +33,35 @@ line = [(32.0, -90.0), (32.0, -89.9995), (32.000005, -89.999), (32.0, -89.998)]
 assert simplify(line) == [line[0], line[-1]]
 bend = [(32.0, -90.0), (32.0005, -89.9995), (32.0, -89.999)]
 assert simplify(bend) == bend
+
+# OSM tags become kinds; furniture and nameless things are not places.
+assert osm_place({"amenity": "fuel", "name": "Shell"}) == ("amenity=fuel", "gas_station")
+assert osm_place({"shop": "bakery", "name": "Sweet Spot"}) == ("shop=bakery", None)  # no kind: found by name
+assert osm_place({"amenity": "bench", "name": "Memorial Bench"}) is None
+assert osm_place({"amenity": "fuel"}) is None
+
+# One place listed twice is kept once (Flowood's real pairs); different places nearby are not merged.
+def place(name, lat, lon, kind="gas_station", street="", src=2, cat="gas station"):
+    return {"name": name, "lat": lat, "lon": lon, "kind": kind, "street": street, "src": src, "cat": cat}
+def kept(*ps):
+    out, _ = dedupe_places([dict(p) for p in ps])
+    return sorted(p["name"] for p in out)
+m = 1 / 111000  # about a metre of latitude
+assert kept(place("Sunoco", 32.3563, -90.0248, street="1012 Hugh Ward Blvd"), place("SUNCO", 32.3563 + 20 * m, -90.0248, src=1)) == ["Sunoco"]
+assert kept(place("Texaco", 32.3518, -90.0273, src=1), place("Texaco Flowood", 32.3518 + 30 * m, -90.0273, street="110 Lakeland Heights Blvd")) == ["Texaco Flowood"]
+assert kept(place("Marathon", 32.35478, -90.06302, street="105 Jacks Place"), place("Xtra Mile", 32.35484, -90.06216, street="105 Jacks Place")) == ["Marathon"]
+assert len(kept(place("Shell", 32.32358, -90.10716, street="2530 Flowood Dr"), place("Sunoco", 32.32347, -90.10716, street="1509 W Northside Dr"))) == 1
+assert kept(place("Taco Bell", 32.3, -90.1, "fast_food"), place("Arby's", 32.3 + 10 * m, -90.1, "fast_food")) == ["Arby's", "Taco Bell"]
+assert len(kept(place("Dollar General", 32.3, -90.1, "store"), place("Dollar Tree", 32.3 + 20 * m, -90.1, "store"))) == 2
+assert len(kept(place("Walmart", 32.3, -90.1, "store", "2530 Jackson Ave W"), place("Walmart Pharmacy", 32.3, -90.1, "pharmacy", "2530 Jackson Ave W"))) == 2
+# A stale OSM brand with no address, on top of the station as it is now: one. Opposite corners: two.
+assert kept(place("BP", 32.35862, -90.01258, src=1), place("Grants Ferry Marathon", 32.35873, -90.01225, street="691 Grants Ferry Rd")) == ["Grants Ferry Marathon"]
+assert len(kept(place("Texaco", 32.35844, -90.01318, street="690 Grants Ferry Rd"), place("Grants Ferry Marathon", 32.35873, -90.01225, street="691 Grants Ferry Rd"))) == 2
+# A shopping centre's tenants share its address, and stay separate places.
+assert kept(place("Five Guys", 32.43389, -90.14833, "restaurant", "1000 Highland Colony Pkwy"),
+            place("Local 463", 32.43450, -90.14838, "restaurant", "1000 Highland Colony Pkwy")) == ["Five Guys", "Local 463"]
+assert len(kept(place("Waffle House", 34.2576, -88.7034, "restaurant"), place("Waffle House", 34.2760, -88.7034, "restaurant"))) == 2
+merged, n = dedupe_places([place("Sunoco", 32.3563, -90.0248, street="1012 Hugh Ward Blvd"), place("SUNCO", 32.3563, -90.0248, src=1)])
+assert n == 1 and merged[0]["src"] == 3  # found in both sources
 
 print("ok")

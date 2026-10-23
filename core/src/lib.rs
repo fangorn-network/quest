@@ -6,6 +6,7 @@
 
 pub mod geocode;
 mod map;
+pub mod places;
 mod route;
 
 pub use geocode::{Geocoder, Location};
@@ -40,6 +41,20 @@ struct Header {
     places: HashMap<String, Vec<u32>>,
     #[serde(default)]
     zip_places: HashMap<String, String>,
+    #[serde(default)]
+    kinds: Vec<String>,
+    #[serde(default)]
+    place_cats: Vec<String>,
+    #[serde(default)]
+    place_names: Vec<String>,
+    #[serde(default)]
+    place_streets: Vec<String>,
+    #[serde(default)]
+    towns: HashMap<String, [f64; 2]>,
+    #[serde(default)]
+    town_names: HashMap<String, String>,
+    #[serde(default)]
+    town_radius: HashMap<String, f64>,
     arrays: Vec<ArrayInfo>,
 }
 
@@ -62,6 +77,17 @@ pub struct Bundle {
     pub places: HashMap<String, Vec<u32>>,
     /// Each ZIP's town for labels: the one sharing the most land with it.
     pub zip_places: HashMap<u32, String>,
+    /// Businesses and other places: kinds (pipeline/categories.json ids), categories, names, streets, and town
+    /// centre points. Empty for a bundle built before places, so new code still loads old data.
+    pub kinds: Vec<String>,
+    pub place_cats: Vec<String>,
+    pub place_names: Vec<String>,
+    pub place_streets: Vec<String>,
+    pub towns: HashMap<String, [f64; 2]>,
+    /// A town's name as written ("Holly Springs", "McComb"), by its normalized key ("HOLLY SPGS", "MCCOMB").
+    pub town_names: HashMap<String, String>,
+    /// A town's size: the radius in metres of a circle with its land area.
+    pub town_radius: HashMap<String, f64>,
     pub node_lat: Vec<i32>,
     pub node_lon: Vec<i32>,
     pub edge_u: Vec<u32>,
@@ -98,6 +124,15 @@ pub struct Bundle {
     pub pt_number: Vec<u32>,
     pub pt_edge: Vec<u32>,
     pub pt_t: Vec<f32>,
+    pub pl_name: Vec<u32>,
+    pub pl_street: Vec<u32>,
+    pub pl_kind: Vec<u8>,
+    pub pl_cat: Vec<u16>,
+    pub pl_edge: Vec<u32>,
+    pub pl_t: Vec<f32>,
+    pub pl_lat: Vec<i32>,
+    pub pl_lon: Vec<i32>,
+    pub pl_zip: Vec<u32>,
 }
 
 trait Le: Sized {
@@ -121,6 +156,7 @@ le!(i32, "int32");
 le!(u32, "uint32");
 le!(f32, "float32");
 le!(u8, "uint8");
+le!(u16, "uint16");
 
 impl Bundle {
     pub fn parse(raw: &[u8]) -> Result<Bundle, String> {
@@ -147,6 +183,12 @@ impl Bundle {
                 take(data, &h.arrays, stringify!($n))?
             };
         }
+        // Places came later: a bundle without them loads with none.
+        macro_rules! opt {
+            ($n:ident) => {
+                if h.arrays.iter().any(|a| a.name == stringify!($n)) { take(data, &h.arrays, stringify!($n))? } else { Vec::new() }
+            };
+        }
         let node_lat: Vec<i32> = arr!(node_lat);
         let edge_u: Vec<u32> = arr!(edge_u);
         Ok(Bundle {
@@ -163,6 +205,13 @@ impl Bundle {
             streets: h.streets,
             places: h.places,
             zip_places: h.zip_places.into_iter().filter_map(|(z, n)| Some((z.parse().ok()?, n))).collect(),
+            kinds: h.kinds,
+            place_cats: h.place_cats,
+            place_names: h.place_names,
+            place_streets: h.place_streets,
+            towns: h.towns,
+            town_names: h.town_names,
+            town_radius: h.town_radius,
             node_lat,
             node_lon: arr!(node_lon),
             edge_u,
@@ -199,6 +248,15 @@ impl Bundle {
             pt_number: arr!(pt_number),
             pt_edge: arr!(pt_edge),
             pt_t: arr!(pt_t),
+            pl_name: opt!(pl_name),
+            pl_street: opt!(pl_street),
+            pl_kind: opt!(pl_kind),
+            pl_cat: opt!(pl_cat),
+            pl_edge: opt!(pl_edge),
+            pl_t: opt!(pl_t),
+            pl_lat: opt!(pl_lat),
+            pl_lon: opt!(pl_lon),
+            pl_zip: opt!(pl_zip),
         })
     }
 
@@ -274,6 +332,11 @@ impl Quest {
         self.geocoder.search(&self.bundle, query, limit)
     }
 
+    /// Businesses and other places by kind near somewhere: "gas stations near Hattiesburg".
+    pub fn places(&self, query: &str, near: Option<[f64; 2]>, limit: usize) -> Result<places::PlacesOut, String> {
+        places::search(&self.bundle, &self.geocoder, query, near, limit)
+    }
+
     /// Matches for an address still being typed, for suggestions under a text box.
     pub fn suggest(&self, query: &str, limit: usize) -> Vec<Location> {
         self.geocoder.suggest(&self.bundle, query, limit)
@@ -285,6 +348,7 @@ impl Quest {
 
     /// One JSON request -> one JSON response; the whole ABI surface.
     /// `{"fn":"geocode","q":"...","limit":5}`, `{"fn":"suggest","q":"400 High S","limit":6}`,
+    /// `{"fn":"places","q":"gas stations near Hattiesburg","near":[lat,lon],"limit":20}`,
     /// `{"fn":"route","from":Location,"to":Location}`, or
     /// `{"fn":"map", ...MapRequest}`.
     pub fn call(&self, request: &str) -> String {
@@ -293,6 +357,7 @@ impl Quest {
         enum Req {
             Geocode { q: String, limit: Option<usize> },
             Suggest { q: String, limit: Option<usize> },
+            Places { q: String, near: Option<[f64; 2]>, limit: Option<usize> },
             Route { from: Location, to: Location },
             Map(MapRequest),
             Meta,
@@ -300,6 +365,10 @@ impl Quest {
         let out = match serde_json::from_str::<Req>(request) {
             Err(e) => serde_json::json!({ "error": format!("bad request: {e}") }),
             Ok(Req::Geocode { q, limit }) => serde_json::json!({ "matches": self.geocode(&q, limit.unwrap_or(5).min(20)) }),
+            Ok(Req::Places { q, near, limit }) => match self.places(&q, near, limit.unwrap_or(20).min(50)) {
+                Ok(out) => serde_json::json!({ "places": out }),
+                Err(e) => serde_json::json!({ "error": e }),
+            },
             Ok(Req::Suggest { q, limit }) => serde_json::json!({ "matches": self.suggest(&q, limit.unwrap_or(6).min(20)) }),
             Ok(Req::Route { from, to }) => match self.route(&from, &to) {
                 Some(r) => serde_json::json!({ "route": r }),

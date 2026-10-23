@@ -24,7 +24,7 @@ const raw = gunzipSync(readFileSync(new URL(`view/regions/${manifest.file}`, web
 const loaded = reply(w.quest_load(copyIn(raw), raw.length));
 if (loaded.error) throw new Error(loaded.error);
 
-const shown = [];
+const shown = [], pinned = [];
 const ctx = {
   ask: async (req) => {
     const b = enc.encode(JSON.stringify(req)), p = copyIn(b);
@@ -33,6 +33,7 @@ const ctx = {
     return out;
   },
   show: (route, from, to) => shown.push([from.label, to.label]),
+  showPlaces: (places) => pinned.push(places.results.length),
 };
 const tools = {};
 globalThis.document = { modelContext: { registerTool: (t) => { tools[t.name] = t; } } };
@@ -43,6 +44,14 @@ const checks = {
   "find-quest-address": [
     [{ address: "400 High St, Jackson MS" }, (o) => Array.isArray(o) && o[0]?.label.startsWith("400 High St")],
     [{ address: "zzzz qqqq" }, (o) => Array.isArray(o) && o.length === 0],
+  ],
+  "find-quest-places": [
+    [{ query: "gas stations near Hattiesburg" }, (o) => o.near === "Hattiesburg" && o.results.length >= 5 && o.results.every((r) => r.kind === "gas station")],
+    [{ query: "coffee", near: [32.30, -90.18], limit: 3 }, (o) => o.results.length === 3 && o.near === "the map's centre"],
+    [{ query: "zzzz qqqq near Jackson" }, (o) => !!o.error],
+    // From a trip's start (Jackson, far from Biloxi): nearest it first, with miles from it.
+    [{ query: "oyster near Biloxi", from: [32.305, -90.183] },
+     (o) => o.ordered_from === "from" && o.results.every((r, i, a) => i === 0 || a[i - 1].from_m <= r.from_m) && o.results[0].miles_from_start > 100],
   ],
   "get-quest-directions": [
     [{ from: "400 High St, Jackson MS 39201", to: "306 Elvis Presley Dr, Tupelo" },
@@ -67,8 +76,15 @@ const [jackson] = await call("find-quest-address", { address: "400 High St, Jack
 const viaMatch = await call("get-quest-directions", { from: jackson, to: "306 Elvis Presley Dr, Tupelo" });
 console.log(`${viaMatch.miles ? "✓" : "✗"} a find-quest-address match as from → ${viaMatch.miles} mi`);
 bad += !viaMatch.miles;
+// A found place goes straight into get-quest-directions as `to`.
+const { results: [bbq] } = await call("find-quest-places", { query: "barbecue in Clarksdale", limit: 1 });
+const toBbq = await call("get-quest-directions", { from: "400 High St, Jackson MS", to: bbq });
+console.log(`${toBbq.miles ? "✓" : "✗"} a find-quest-places result as to → ${bbq.label}: ${toBbq.miles} mi`);
+bad += !toBbq.miles;
+console.log(`${pinned.length === 4 ? "✓" : "✗"} page pinned ${pinned.length} agent searches`);
+bad += pinned.length !== 4;
 // The page shows what an agent asked for, and the form uses the same actions.
-console.log(`${shown.length === 2 ? "✓" : "✗"} page painted ${shown.length} agent routes`);
-bad += shown.length !== 2;
+console.log(`${shown.length === 3 ? "✓" : "✗"} page painted ${shown.length} agent routes`);
+bad += shown.length !== 3;
 bad += !(typeof actions.findAddress === "function" && typeof actions.getDirections === "function");
 process.exit(bad ? 1 : 0);

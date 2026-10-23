@@ -18,6 +18,12 @@ pub struct Location {
     /// number wasn't found, so the nearest range on that street, or the street itself with no number).
     #[serde(default)]
     pub quality: String,
+    /// For a business or other place: what it is ("gas station", "barbecue restaurant").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// For a result of a places search: metres from where it was searched near.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance_m: Option<f64>,
 }
 
 /// The same rules as pipeline/build_bundle.py's normalize(), from the same file.
@@ -64,19 +70,110 @@ struct Parsed {
     zip: Option<u32>,
 }
 
-pub struct Geocoder {
-    pub norm: Normalizer,
+/// Names by their normalized key (street names, or place names), for exact, loose and as-typed matching.
+pub(crate) struct Names {
     keys: Vec<String>,
     by_key: HashMap<String, usize>,
-    key_streets: Vec<Vec<u32>>,
+    ids: Vec<Vec<u32>>,
+}
+
+impl Names {
+    fn new(items: impl Iterator<Item = (u32, String)>) -> Names {
+        let mut n = Names { keys: Vec::new(), by_key: HashMap::new(), ids: Vec::new() };
+        for (id, key) in items {
+            let k = *n.by_key.entry(key.clone()).or_insert_with(|| {
+                n.keys.push(key);
+                n.ids.push(Vec::new());
+                n.keys.len() - 1
+            });
+            n.ids[k].push(id);
+        }
+        n
+    }
+
+    fn has(&self, s: &str) -> bool {
+        self.by_key.contains_key(s)
+    }
+
+    /// Ids with exactly this normalized name (score 0).
+    pub(crate) fn exact(&self, s: &str) -> Vec<(u32, u8)> {
+        self.by_key.get(s).map_or(Vec::new(), |&k| self.ids[k].iter().map(|&id| (id, 0)).collect())
+    }
+
+    /// Ids whose name contains the typed one (score 1), or failing that is a typo or two away (2).
+    pub(crate) fn loose(&self, s: &str) -> Vec<(u32, u8)> {
+        let ids = |k: usize, score: u8| self.ids[k].iter().map(move |&id| (id, score));
+        if s.len() < 3 {
+            return Vec::new();
+        }
+        // ponytail: linear scans over the names (~40k streets, ~100k places), a few ms; an n-gram index if a
+        // country's names get slow.
+        let (pre, suf, mid) = (format!("{s} "), format!(" {s}"), format!(" {s} "));
+        let mut hits: Vec<usize> = (0..self.keys.len())
+            .filter(|&k| {
+                let key = &self.keys[k];
+                key.starts_with(&pre) || key.ends_with(&suf) || key.contains(&mid)
+            })
+            .take(60)
+            .collect();
+        let score = if hits.is_empty() {
+            let max = if s.len() < 8 { 1 } else { 2 };
+            hits = (0..self.keys.len()).filter(|&k| edit_distance(&self.keys[k], s) <= max).take(60).collect();
+            2
+        } else {
+            1
+        };
+        hits.into_iter().flat_map(|k| ids(k, score)).collect()
+    }
+
+    /// Ids for text still being typed (score 1): names starting with it, or with a word starting with it
+    /// ("STATE" finds "N STATE ST"). Failing that, the last word is likely half a word the normalizer would
+    /// have shortened ("HIGH STR" before "STREET" becomes "ST"), so each word it could finish as is tried,
+    /// shortened, and then it is dropped.
+    fn prefix(&self, s: &str, tokens: &HashMap<String, String>) -> Vec<(u32, u8)> {
+        if s.len() < 2 {
+            return Vec::new();
+        }
+        let word = format!(" {s}");
+        let hits: Vec<usize> =
+            (0..self.keys.len()).filter(|&k| self.keys[k].starts_with(s) || self.keys[k].contains(&word)).take(60).collect();
+        let ids = |hits: Vec<usize>| hits.into_iter().flat_map(|k| self.ids[k].iter().map(|&id| (id, 1))).collect();
+        let Some((head, last)) = s.rsplit_once(' ').filter(|_| hits.is_empty()) else { return ids(hits) };
+        let mut finished: Vec<(u32, u8)> = Vec::new();
+        for (full, short) in tokens {
+            if full.starts_with(last) {
+                for m in self.prefix(&format!("{head} {short}"), tokens) {
+                    if !finished.contains(&m) {
+                        finished.push(m);
+                    }
+                }
+            }
+        }
+        if finished.is_empty() { self.prefix(head, tokens) } else { finished }
+    }
+}
+
+pub struct Geocoder {
+    pub norm: Normalizer,
+    streets: Names,
+    pub(crate) places: Names,
+    pub(crate) kinds: crate::places::Kinds,
     zip_place: HashMap<u32, String>,
 }
+
+/// A match being ranked: (name score, ZIP preference, quality rank, dedupe key, location).
+type Found = (u8, usize, u8, String, Location);
 
 fn digits(s: &str, n: usize) -> bool {
     s.len() == n && s.bytes().all(|c| c.is_ascii_digit())
 }
 
-fn title(s: &str) -> String {
+/// A town's name as written, from its normalized key.
+pub(crate) fn town_name(b: &Bundle, key: &str) -> String {
+    b.town_names.get(key).cloned().unwrap_or_else(|| title(key))
+}
+
+pub(crate) fn title(s: &str) -> String {
     s.split(' ')
         .map(|w| {
             let mut c = w.chars();
@@ -128,25 +225,19 @@ fn equal_range(arr: &[u32], key: u32) -> std::ops::Range<usize> {
 
 impl Geocoder {
     pub fn new(b: &Bundle) -> Geocoder {
-        let (mut keys, mut by_key, mut key_streets) = (Vec::new(), HashMap::new(), Vec::<Vec<u32>>::new());
-        for (sid, (_, key)) in b.streets.iter().enumerate() {
-            let k = *by_key.entry(key.clone()).or_insert_with(|| {
-                keys.push(key.clone());
-                key_streets.push(Vec::new());
-                keys.len() - 1
-            });
-            key_streets[k].push(sid as u32);
-        }
+        let norm = Normalizer::default();
+        let streets = Names::new(b.streets.iter().enumerate().map(|(sid, (_, key))| (sid as u32, key.clone())));
+        let places = Names::new(b.pl_name.iter().enumerate().map(|(i, &n)| (i as u32, norm.normalize(&b.place_names[n as usize]))));
         // Each ZIP's town for labels: the bundle's (most shared land); else the first town listing it.
         let mut names: Vec<_> = b.places.iter().collect();
         names.sort();
-        let mut zip_place: HashMap<u32, String> = b.zip_places.iter().map(|(z, n)| (*z, title(n))).collect();
+        let mut zip_place: HashMap<u32, String> = b.zip_places.iter().map(|(z, n)| (*z, n.clone())).collect();
         for (name, zips) in names {
             for z in zips {
-                zip_place.entry(*z).or_insert_with(|| title(name));
+                zip_place.entry(*z).or_insert_with(|| town_name(b, name));
             }
         }
-        Geocoder { norm: Normalizer::default(), keys, by_key, key_streets, zip_place }
+        Geocoder { norm, streets, places, kinds: crate::places::Kinds::new(b), zip_place }
     }
 
     fn parse(&self, b: &Bundle, q: &str) -> Parsed {
@@ -188,67 +279,11 @@ impl Geocoder {
         let tokens = &parts[0];
         for k in (1..=tokens.len()).rev() {
             let (street, city) = (tokens[..k].join(" "), tokens[k..].join(" "));
-            if self.by_key.contains_key(&street) && (city.is_empty() || b.places.contains_key(&city)) {
+            if self.streets.has(&street) && (city.is_empty() || b.places.contains_key(&city)) {
                 return Parsed { number, street, city: (!city.is_empty()).then_some(city), zip };
             }
         }
         Parsed { number, street: tokens.join(" "), city: None, zip }
-    }
-
-    /// Street ids with exactly this normalized name (score 0).
-    fn match_exact(&self, s: &str) -> Vec<(u32, u8)> {
-        self.by_key.get(s).map_or(Vec::new(), |&k| self.key_streets[k].iter().map(|&sid| (sid, 0)).collect())
-    }
-
-    /// Street ids whose name contains the typed one (score 1), or failing that is a typo or two away (2).
-    fn match_loose(&self, s: &str) -> Vec<(u32, u8)> {
-        let ids = |k: usize, score: u8| self.key_streets[k].iter().map(move |&sid| (sid, score));
-        if s.len() < 3 {
-            return Vec::new();
-        }
-        // ponytail: linear scans over ~40k names, a few ms; an n-gram index if a country's names get slow.
-        let (pre, suf, mid) = (format!("{s} "), format!(" {s}"), format!(" {s} "));
-        let mut hits: Vec<usize> = (0..self.keys.len())
-            .filter(|&k| {
-                let key = &self.keys[k];
-                key.starts_with(&pre) || key.ends_with(&suf) || key.contains(&mid)
-            })
-            .take(60)
-            .collect();
-        let score = if hits.is_empty() {
-            let max = if s.len() < 8 { 1 } else { 2 };
-            hits = (0..self.keys.len()).filter(|&k| edit_distance(&self.keys[k], s) <= max).take(60).collect();
-            2
-        } else {
-            1
-        };
-        hits.into_iter().flat_map(|k| ids(k, score)).collect()
-    }
-
-    /// Street ids for text still being typed (score 1): names starting with it, or with a word starting
-    /// with it ("STATE" finds "N STATE ST"). Failing that, the last word is likely half a word the
-    /// normalizer would have shortened ("HIGH STR" before "STREET" becomes "ST"), so it is dropped.
-    fn match_prefix(&self, s: &str) -> Vec<(u32, u8)> {
-        if s.len() < 2 {
-            return Vec::new();
-        }
-        let word = format!(" {s}");
-        let hits: Vec<usize> =
-            (0..self.keys.len()).filter(|&k| self.keys[k].starts_with(s) || self.keys[k].contains(&word)).take(60).collect();
-        let ids = |hits: Vec<usize>| hits.into_iter().flat_map(|k| self.key_streets[k].iter().map(|&sid| (sid, 1))).collect();
-        let Some((head, last)) = s.rsplit_once(' ').filter(|_| hits.is_empty()) else { return ids(hits) };
-        // "STR" could be STREET (ST), "BLV" BOULEVARD (BLVD): try each word it could finish as, shortened.
-        let mut finished: Vec<(u32, u8)> = Vec::new();
-        for (full, short) in &self.norm.tokens {
-            if full.starts_with(last) {
-                for m in self.match_prefix(&format!("{head} {short}")) {
-                    if !finished.contains(&m) {
-                        finished.push(m);
-                    }
-                }
-            }
-        }
-        if finished.is_empty() { self.match_prefix(head) } else { finished }
     }
 
     /// Matches for a whole address, best first.
@@ -278,13 +313,17 @@ impl Geocoder {
         let zips = p.zip.map(|z| vec![z]).or_else(|| p.city.as_ref().and_then(town));
         // The exact name in the city, then a looser name in the city ("Main St" finds "N Main St"), then
         // the exact name anywhere, then a looser one anywhere.
-        let exact = self.match_exact(&p.street);
-        let loose = if partial { self.match_prefix(&p.street) } else { self.match_loose(&p.street) };
+        let exact = self.streets.exact(&p.street);
+        let loose = if partial { self.streets.prefix(&p.street, &self.norm.tokens) } else { self.streets.loose(&p.street) };
         let mut found = Vec::new();
         for (streets, z) in [(&exact, zips.as_deref()), (&loose, zips.as_deref()), (&exact, None), (&loose, None)] {
             if found.is_empty() {
                 found = self.find(b, &p, streets, z);
             }
+        }
+        // With no house number it may be a business or other place by name ("Waffle House, Tupelo").
+        if p.number.is_none() {
+            found.extend(self.named_places(b, &p, zips.as_deref(), partial));
         }
         found.sort_by(|a, b| (a.0, a.1, a.2).cmp(&(b.0, b.1, b.2)).then_with(|| a.4.label.cmp(&b.4.label)));
         // One answer per place: OSM and TIGER often hold the same address under "Drive"/"Dr" or two ZIPs.
@@ -302,7 +341,7 @@ impl Geocoder {
 
     /// (street score, ZIP preference, quality rank, street key, location) for every street and ZIP that holds
     /// the address. The preference is the ZIP's place in the typed town's list, strongest first (0 with no town).
-    fn find(&self, b: &Bundle, p: &Parsed, streets: &[(u32, u8)], zips: Option<&[u32]>) -> Vec<(u8, usize, u8, String, Location)> {
+    fn find(&self, b: &Bundle, p: &Parsed, streets: &[(u32, u8)], zips: Option<&[u32]>) -> Vec<Found> {
         let zip_ok = |z: u32| zips.is_none_or(|zs| zs.contains(&z));
         let mut out = Vec::new();
         let mut push = |score: u8, rank: u8, sid: u32, zip: u32, (edge, t): (u32, f32)| {
@@ -311,14 +350,15 @@ impl Geocoder {
                 .city
                 .as_ref()
                 .filter(|c| b.places.get(*c).is_some_and(|zs| zs.contains(&zip)))
-                .map(|c| title(c))
+                .map(|c| town_name(b, c))
                 .or_else(|| self.zip_place.get(&zip).cloned())
                 .map_or(String::new(), |c| format!("{c}, "));
             let num = p.number.map_or(String::new(), |n| format!("{n} "));
             let label = format!("{num}{}, {place}MS {zip:05}", b.streets[sid as usize].0);
             let quality = ["exact", "interpolated", "approximate"][rank as usize].to_string();
             let pref = zips.and_then(|zs| zs.iter().position(|&z| z == zip)).unwrap_or(0);
-            out.push((score, pref, rank, b.streets[sid as usize].1.clone(), Location { label, edge, t, lat, lon, quality }));
+            let loc = Location { label, edge, t, lat, lon, quality, kind: None, distance_m: None };
+            out.push((score, pref, rank, b.streets[sid as usize].1.clone(), loc));
         };
         for &(sid, score) in streets {
             let rngs = equal_range(&b.rng_street, sid);
@@ -372,5 +412,79 @@ impl Geocoder {
             }
         }
         out
+    }
+
+    /// Places named like the text, best first, in the typed town if any. Without a comma the town may end the
+    /// text ("Waffle House Tupelo"): the longest known place name is tried first, the rest as the town.
+    fn named_places(&self, b: &Bundle, p: &Parsed, zips: Option<&[u32]>, partial: bool) -> Vec<Found> {
+        let words: Vec<&str> = p.street.split(' ').collect();
+        let mut tries: Vec<(String, Option<Vec<u32>>, Option<String>)> = Vec::new();
+        if p.city.is_none() && p.zip.is_none() {
+            for k in (1..words.len()).rev() {
+                let city = words[k..].join(" ");
+                if let Some(zs) = b.places.get(&city) {
+                    tries.push((words[..k].join(" "), Some(zs.clone()), Some(city)));
+                }
+            }
+        }
+        tries.push((p.street.clone(), zips.map(<[u32]>::to_vec), p.city.clone()));
+        for (name, zs, city) in tries {
+            let exact = self.places.exact(&name);
+            let loose = if partial { self.places.prefix(&name, &self.norm.tokens) } else { self.places.loose(&name) };
+            // In the town: the exact name, then a looser one; then the exact name anywhere. A loose name
+            // anywhere is no answer to "X in this town", so it is tried only when no town was given.
+            let steps = match zs.as_deref() {
+                Some(z) => vec![(&exact, Some(z)), (&loose, Some(z)), (&exact, None)],
+                None => vec![(&exact, None), (&loose, None)],
+            };
+            for (ids, z) in steps {
+                let found: Vec<Found> = ids
+                    .iter()
+                    .filter(|&&(i, _)| z.is_none_or(|zs| zs.contains(&b.pl_zip[i as usize])))
+                    .take(200)
+                    .map(|&(i, score)| {
+                        let pref = z.and_then(|zs| zs.iter().position(|&x| x == b.pl_zip[i as usize])).unwrap_or(0);
+                        let key = format!("place:{}", self.places_key(b, i as usize));
+                        (score, pref, 0, key, self.place_location(b, i as usize, city.as_ref()))
+                    })
+                    .collect();
+                if !found.is_empty() {
+                    return found;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn places_key(&self, b: &Bundle, i: usize) -> String {
+        self.norm.normalize(&b.place_names[b.pl_name[i] as usize])
+    }
+
+    /// Place i as a Location: its name, street, town and ZIP, routed to the road it is on and marked at its door.
+    pub(crate) fn place_location(&self, b: &Bundle, i: usize, city: Option<&String>) -> Location {
+        let zip = b.pl_zip[i];
+        let town = city
+            .filter(|c| b.places.get(*c).is_some_and(|zs| zs.contains(&zip)))
+            .map(|c| town_name(b, c))
+            .or_else(|| self.zip_place.get(&zip).cloned());
+        let mut label = b.place_names[b.pl_name[i] as usize].clone();
+        for part in [b.place_streets[b.pl_street[i] as usize].clone(), town.unwrap_or_default()] {
+            if !part.is_empty() {
+                label = format!("{label}, {part}");
+            }
+        }
+        if zip > 0 {
+            label = format!("{label}, MS {zip:05}");
+        }
+        Location {
+            label,
+            edge: b.pl_edge[i],
+            t: b.pl_t[i],
+            lat: b.pl_lat[i] as f64 * 1e-7,
+            lon: b.pl_lon[i] as f64 * 1e-7,
+            quality: "place".into(),
+            kind: Some(self.kinds.of(b, i)),
+            distance_m: None,
+        }
     }
 }

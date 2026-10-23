@@ -1,5 +1,5 @@
 // The page: two addresses in, a printable list of turns out. All lookups go to worker.js in this tab.
-import { actions, registerAgent } from "./agent.js";
+import { actions, orderFrom, registerAgent } from "./agent.js";
 
 const $ = (id) => document.getElementById(id);
 const worker = new Worker("worker.js");
@@ -26,6 +26,7 @@ worker.onmessage = ({ data }) => {
     status("Map data ready. Nothing you type leaves this device.");
     $("go").disabled = false;
     drawMap();
+    $("find-go").disabled = false;
     registerAgent(ctx); // after the data loads, so a tool never answers from an empty map
   } else if (data.type === "error") {
     status(data.message, true);
@@ -47,6 +48,7 @@ const NOTES = {
   exact: "",
   interpolated: "",
   approximate: " (house number not found; using the nearest known block)",
+  place: "",
 };
 
 // Show the matches for one field as radio buttons, the first selected.
@@ -62,7 +64,7 @@ function showChoices(side, matches) {
     const radio = Object.assign(document.createElement("input"), { type: "radio", name: `${side}-pick`, checked: i === 0 });
     radio.addEventListener("change", () => { chosen[side] = m; });
     const note = document.createElement("small");
-    note.textContent = NOTES[m.quality];
+    note.textContent = m.kind ? ` ${m.kind}` : (NOTES[m.quality] ?? "");
     label.append(radio, " ", m.label, note);
     fs.append(label);
   });
@@ -89,8 +91,8 @@ async function resolve(side) {
 }
 
 function render(route) {
-  $("r-from").textContent = route.from + NOTES[chosen.from.quality];
-  $("r-to").textContent = route.to + NOTES[chosen.to.quality];
+  $("r-from").textContent = route.from + (NOTES[chosen.from.quality] ?? "");
+  $("r-to").textContent = route.to + (NOTES[chosen.to.quality] ?? "");
   $("r-total").textContent = `${miles(route.distance_m).toFixed(1)} mi, about ${duration(route.duration_s)}`;
   $("r-steps").replaceChildren(...route.steps.map((s, i) => {
     const tr = document.createElement("tr");
@@ -104,12 +106,12 @@ function render(route) {
   $("r-date").textContent = new Date().toLocaleDateString();
   $("r-data").textContent = `${meta.osm_date?.slice(0, 10) ?? "unknown"} (OpenStreetMap) and ${meta.tiger_year} (TIGER)`;
   $("result").hidden = false;
-  Object.assign(view, { bbox: null, moves: view.moves + 1, route: route.path, from: [chosen.from.lat, chosen.from.lon], to: [chosen.to.lat, chosen.to.lon] });
+  Object.assign(view, { bbox: null, moves: view.moves + 1, pins: [], anchor: null, route: route.path, from: [chosen.from.lat, chosen.from.lon], to: [chosen.to.lat, chosen.to.lon] });
   drawMap();
 }
 
 // ---- The map: drawn by quest-core as SVG from the bundle's roads, redrawn for every move. ----
-const view = { bbox: null, route: [], from: null, to: null, busy: false, again: false, moves: 0 };
+const view = { bbox: null, route: [], from: null, to: null, pins: [], anchor: null, busy: false, again: false, moves: 0 };
 
 async function drawMap() {
   if (!meta) return;
@@ -117,7 +119,7 @@ async function drawMap() {
   view.busy = true;
   const el = $("map"), moves = view.moves;
   const out = await ask({ fn: "map", bbox: view.bbox, width: el.clientWidth, height: el.clientHeight,
-                          route: view.route, from: view.from, to: view.to });
+                          route: view.route, from: view.from, to: view.to, pins: view.pins, anchor: view.anchor });
   if (view.moves === moves) view.bbox = out.bbox; // else the person moved the map meanwhile: keep their box
   el.innerHTML = out.svg; // markup from quest-core; it holds no text anyone typed
   view.busy = false;
@@ -209,11 +211,18 @@ function combobox(side) {
     list.children[i].scrollIntoView({ block: "nearest" });
   };
   const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); highlight(-1); };
-  const pick = (loc) => { chosen[side] = loc; input.value = loc.label; $(`${side}-choices`).replaceChildren(); close(); };
+  const pick = (loc) => {
+    chosen[side] = loc;
+    input.value = loc.label;
+    $(`${side}-choices`).replaceChildren();
+    close();
+    if (side === "from") fromChanged();
+  };
   const open = (matches) => {
     items = matches;
     list.replaceChildren(...matches.map((m, i) => {
       const li = Object.assign(document.createElement("li"), { id: `${side}-opt-${i}`, textContent: m.label });
+      if (m.kind) li.append(Object.assign(document.createElement("small"), { textContent: m.kind }));
       li.setAttribute("role", "option");
       li.addEventListener("pointerdown", (e) => { e.preventDefault(); pick(m); }); // before the input loses focus
       return li;
@@ -223,6 +232,7 @@ function combobox(side) {
     highlight(-1);
   };
   input.addEventListener("input", () => {
+    if (chosen[side] && side === "from") queueMicrotask(fromChanged);
     chosen[side] = null;
     $(`${side}-choices`).replaceChildren();
     clearTimeout(timer);
@@ -254,6 +264,7 @@ combobox("to");
 $("swap").addEventListener("click", () => {
   [$("from").value, $("to").value] = [$("to").value, $("from").value];
   [chosen.from, chosen.to] = [chosen.to, chosen.from];
+  fromChanged();
   const [a, b] = [$("from-choices"), $("to-choices")];
   const kids = [[...a.childNodes], [...b.childNodes]];
   a.replaceChildren(...kids[1]);
@@ -262,10 +273,100 @@ $("swap").addEventListener("click", () => {
 
 $("print").addEventListener("click", () => window.print());
 
-// What agent.js's actions use: quest-core, and a way to paint a route on the page (for the form and for
-// agents alike, so the person sees directions an agent asked for).
+// ---- Find places: "gas stations near Hattiesburg" -> numbered pins on the map and a list to pick from. ----
+function findStatus(text, error = false) {
+  $("find-status").textContent = text;
+  $("find-status").classList.toggle("error", error);
+}
+
+// Use a found place as one end of the trip; with the other end filled in too, get directions.
+function useAs(side, loc) {
+  chosen[side] = loc;
+  $(side).value = loc.label;
+  $(`${side}-choices`).replaceChildren();
+  if (side === "from") fromChanged();
+  const other = side === "from" ? "to" : "from";
+  if ($(other).value.trim()) $("trip").requestSubmit();
+  else $(other).focus();
+}
+
+// Found places, nearest the person's From address first, with straight-line distances from it; without a From,
+// in the order found (closest to the place searched near) and with no distance: where a search was centred (a
+// town's middle, the map's centre) is not where they are. The map's pin numbers follow the list.
+let lastPlaces = null;
+
+function renderPlaceList() {
+  if (!lastPlaces) return;
+  const { what, near } = lastPlaces;
+  const origin = chosen.from && [chosen.from.lat, chosen.from.lon];
+  const results = orderFrom(lastPlaces.results, origin);
+  const list = $("place-list");
+  list.replaceChildren(...results.map((p, i) => {
+    const li = document.createElement("li");
+    const n = Object.assign(document.createElement("span"), { className: "n", textContent: String(i + 1) });
+    const text = document.createElement("div");
+    const [name, ...rest] = p.label.split(", ");
+    const parts = [p.kind, rest.join(", ")];
+    if (origin) parts.push(`${distance(p.from_m)} away`);
+    text.append(Object.assign(document.createElement("strong"), { textContent: name }), document.createElement("br"),
+      Object.assign(document.createElement("span"), { className: "what", textContent: parts.join(" · ") }));
+    const go = Object.assign(document.createElement("div"), { className: "go" });
+    for (const [side, label] of [["to", "To here"], ["from", "From here"]]) {
+      const b = Object.assign(document.createElement("button"), { type: "button", textContent: label });
+      b.setAttribute("aria-label", `${label}: ${name}`);
+      b.addEventListener("click", () => useAs(side, p));
+      go.append(b);
+    }
+    li.append(n, text, go);
+    return li;
+  }));
+  list.hidden = !results.length;
+  const What = `${what[0].toUpperCase()}${what.slice(1)} near ${near.label}`;
+  const order = origin
+    ? `nearest ${chosen.from.label.split(", ")[0]} first (straight-line distances)`
+    : `closest to ${near.label} first. Add a From address to see how far each is from you`;
+  findStatus(results.length
+    ? `${What}: ${results.length} found, ${order}. Nothing you typed left this device.`
+    : `Nothing found for ${what} near ${near.label}.`);
+  view.pins = results.map((p) => [p.lat, p.lon]);
+  drawMap();
+}
+
+// From changed (picked, typed over, swapped, used from a result, confirmed): show where it is on the map (the
+// A marker) once it is one known place, and re-order the places list from it.
+function fromChanged() {
+  view.from = chosen.from ? [chosen.from.lat, chosen.from.lon] : null;
+  if (lastPlaces) renderPlaceList(); // draws the map too
+  else drawMap();
+}
+
+function showPlaces(places) {
+  lastPlaces = places;
+  Object.assign(view, { bbox: null, moves: view.moves + 1, anchor: [places.near.lat, places.near.lon] });
+  renderPlaceList();
+}
+
+$("find").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const query = $("q").value.trim();
+  if (!query) return findStatus("Type what to find, like “gas stations near Hattiesburg”.", true);
+  const [s, w, n, e] = view.bbox ?? [];
+  const near = view.bbox ? [(s + n) / 2, (w + e) / 2] : null; // the map's centre, when the query names no place
+  const fromText = $("from").value.trim();
+  if (!chosen.from && fromText) {
+    const found = await actions.findAddress(ctx, { address: fromText, limit: 2 });
+    if (Array.isArray(found) && found.length === 1) chosen.from = found[0]; // ambiguous: no distances until picked
+    if (chosen.from) view.from = [chosen.from.lat, chosen.from.lon];
+  }
+  const out = await actions.findPlaces(ctx, { query, near, limit: 20 });
+  if (out.error) findStatus(out.error, true);
+});
+
+// What agent.js's actions use: quest-core, and ways to paint a route or found places on the page (for the
+// page's own forms and for agents alike, so the person sees what an agent asked for).
 const ctx = {
   ask,
+  showPlaces,
   show(route, from, to) {
     for (const [side, loc] of [["from", from], ["to", to]]) {
       chosen[side] = loc;
@@ -273,6 +374,7 @@ const ctx = {
       $(`${side}-choices`).replaceChildren();
     }
     render(route);
+    fromChanged();
   },
 };
 

@@ -141,3 +141,55 @@ fn labels_roads() {
     // Every label is well-formed text: nothing from OSM's names escapes into the markup.
     assert_eq!(town.matches("<text").count(), town.matches("</text>").count());
 }
+
+#[test]
+fn finds_businesses_by_name() {
+    let Some(q) = quest() else { return eprintln!("no bundle, skipped") };
+    let top = |s: &str| q.geocode(s, 5).into_iter().next().expect(s);
+    let wh = top("Waffle House, Tupelo");
+    assert!(wh.label.starts_with("Waffle House") && wh.label.contains("Tupelo") && wh.kind.is_some(), "{wh:?}");
+    let abes = top("Abe's Bar-B-Q");
+    assert!(abes.label.contains("Clarksdale"), "{}", abes.label);
+    assert!(top("Waffle House Tupelo").label.contains("Tupelo"), "the town may end the text, no comma");
+    // As typed, a business comes up alongside streets.
+    assert!(q.suggest("Elvis Presley Birth", 6).iter().any(|l| l.label.starts_with("Elvis Presley Birthplace")));
+    // Addresses are unchanged.
+    assert_eq!(top("400 High St, Jackson MS 39201").label, "400 High St, Jackson, MS 39201");
+    // A business found by name routes like an address.
+    assert!(q.route(&top("400 High St, Jackson MS 39201"), &abes).is_some());
+}
+
+#[test]
+fn finds_places_near_somewhere() {
+    let Some(q) = quest() else { return eprintln!("no bundle, skipped") };
+    let gas = q.places("Gas stations near Hattiesburg", None, 20).unwrap();
+    assert!(gas.what.contains("gas station") && gas.near.label == "Hattiesburg", "{} / {}", gas.what, gas.near.label);
+    assert!(gas.results.len() >= 5 && gas.results.iter().all(|l| l.kind.as_deref() == Some("gas station")));
+    let d: Vec<f64> = gas.results.iter().map(|l| l.distance_m.unwrap()).collect();
+    assert!(d.windows(2).all(|w| w[0] <= w[1] + 50.0) && d[0] < 10_000.0, "nearest first (to 50 m): {d:?}");
+    // A town means all of it: Flowood's east side (Highway 25, Grants Ferry Rd) is 6-7 km from its centre point.
+    let flowood: Vec<String> = q.places("gas station flowood", None, 20).unwrap().results.into_iter().map(|l| l.label).collect();
+    for addr in ["5657 Highway 25", "690 Grants Ferry Rd", "691 Grants Ferry Rd"] {
+        assert!(flowood.iter().any(|l| l.contains(addr)), "{addr} missing from {} Flowood results", flowood.len());
+    }
+    // A category that is no kind of ours, and a name.
+    assert!(q.places("barbecue in Clarksdale", None, 20).unwrap().results.iter().any(|l| l.label.starts_with("Abe's")));
+    let walmart = q.places("Walmart near Oxford", None, 10).unwrap();
+    assert!(!walmart.results.is_empty() && walmart.results.iter().all(|l| l.label.to_lowercase().contains("walmart")));
+    assert!(walmart.results.iter().all(|l| l.kind.as_deref() != Some("money transfer service")), "counters inside stores");
+    // Towns are named as written, not as the normalized key ("Holly Spgs").
+    assert!(walmart.results.iter().all(|l| !l.label.contains("Spgs")), "{:?}", walmart.results.iter().map(|l| &l.label).collect::<Vec<_>>());
+    // No town connector: a town at the end still counts; no place at all uses the given point.
+    assert_eq!(q.places("pharmacies tupelo", None, 5).unwrap().near.label, "Tupelo");
+    assert!(q.places("coffee", Some([32.30, -90.18]), 5).unwrap().results.len() == 5);
+    // Nothing to go on is an error, not a crash.
+    assert!(q.places("coffee", None, 5).is_err());
+    assert!(q.places("zzzz qqqq near Jackson", None, 5).is_err());
+    assert!(q.places("gas near Qzxvwq", None, 5).is_err());
+    // By name, one result per address: Overture lists a Walmart's bakery and photo centre as places too.
+    let mut addrs: Vec<String> = walmart.results.iter().map(|l| l.label.split_once(", ").map_or(String::new(), |(_, a)| a.to_string())).collect();
+    let n = addrs.len();
+    addrs.sort();
+    addrs.dedup();
+    assert_eq!(addrs.len(), n, "one Walmart per address");
+}

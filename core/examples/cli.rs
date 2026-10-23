@@ -1,6 +1,6 @@
 //! cargo run --release --example cli -- "<from address>" ["<to address>"]
 //! One address: its matches. Two: the route between their best matches. QUEST_BUNDLE overrides the path;
-//! QUEST_SVG=<file> also writes the route's map there.
+//! QUEST_SVG=<file> also writes the route's map there. QUEST_PLACES=1: one places query instead.
 use std::io::Read;
 
 fn main() {
@@ -11,6 +11,19 @@ fn main() {
     let q = quest_core::Quest::load(&raw).unwrap();
     eprintln!("loaded {path} in {:?}", t.elapsed());
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if std::env::var("QUEST_PLACES").is_ok() {
+        // QUEST_PLACES=1 cargo run --release --example cli -- "gas stations near Hattiesburg"
+        match q.places(&args[0], None, 20) {
+            Ok(out) => {
+                println!("{} near {} ({:.4}, {:.4}):", out.what, out.near.label, out.near.lat, out.near.lon);
+                for (i, l) in out.results.iter().enumerate() {
+                    println!("{:>3}. {} [{}] {:.1} km ({:.5}, {:.5})", i + 1, l.label, l.kind.as_deref().unwrap_or(""), l.distance_m.unwrap_or(0.0) / 1000.0, l.lat, l.lon);
+                }
+            }
+            Err(e) => println!("error: {e}"),
+        }
+        return;
+    }
     let found: Vec<_> = args.iter().map(|a| q.geocode(a, 5)).collect();
     for (a, f) in args.iter().zip(&found) {
         eprintln!("{a:?}:");
