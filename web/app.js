@@ -23,7 +23,9 @@ worker.onmessage = ({ data }) => {
     status(`Downloading Mississippi map data: ${(data.loaded / 1e6).toFixed(1)} of ${(data.total / 1e6).toFixed(1)} MB`);
   } else if (data.type === "ready") {
     meta = data.meta;
-    status("Map data ready. Nothing you type leaves this device.");
+    status(data.checked === "record"
+      ? "Map data ready, matching quest's on-chain record. Nothing you type leaves this device."
+      : "Map data ready. Nothing you type leaves this device.");
     $("go").disabled = false;
     drawMap();
     $("find-go").disabled = false;

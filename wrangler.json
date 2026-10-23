@@ -62,7 +62,10 @@
        },
        "facets": [
         "tags"
-       ]
+       ],
+       "externalUrl": {
+        "quest.region.v1": "https://quest.fangorn.network/"
+       }
       }
      }
     },
@@ -71,7 +74,8 @@
    "repos": [],
    "paid": null,
    "private": null
-  }
+  },
+  "IPFS_GATEWAY": "https://green-reasonable-heron-957.mypinata.cloud"
  },
  "account_id": "0beaeb0776ca9e8404297afe0da73e5a"
 }

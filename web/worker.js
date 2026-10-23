@@ -4,9 +4,11 @@
 
 // The region's data lives in the app's R2 bucket (npm run publish:data), served by the Worker under /view/, so
 // a deploy from git (which holds no data) still finds it. Locally, pipeline/web.sh stages a copy at the same path.
-// ponytail: the manifest comes from this site; Phase 4 reads the sha256 from the app's record on chain.
+// Which file, and its sha256, come from the region's record committed on chain (pipeline/region_record.mjs),
+// which the Worker indexes into the app's view; until there is one, from this site's own manifest.
 const DATA = "view/regions/";
 const MANIFEST = `${DATA}us-ms.json`;
+const REGION = "quest:region:us-ms";
 const enc = new TextEncoder(), dec = new TextDecoder();
 let wasm;
 
@@ -32,6 +34,31 @@ function call(req) {
   return out;
 }
 
+const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+  .map((b) => b.toString(16).padStart(2, "0")).join("");
+const gunzip = (bytes) => new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")));
+
+// The region's record in the app's view (westmarch's layout: catalog -> domain manifest -> gzipped ndjson
+// shards of {track_id, fields}), each shard checked against its manifest's sha256. Null if there is none.
+async function regionRecord(id) {
+  const get = async (path) => { const r = await fetch(`view/${path}`); return r.ok ? r : null; };
+  const catalog = await (await get("cdn/catalog"))?.json();
+  for (const d of catalog?.domains ?? []) {
+    if (!d.entity_types?.includes("quest.region.v1")) continue;
+    const manifest = await (await get(`cdn/domains/${d.name}/manifest`))?.json();
+    const gone = new Set(manifest?.tombstones ?? []);
+    for (const shard of manifest?.shards ?? []) {
+      const gz = new Uint8Array(await (await get(`cdn/domains/${d.name}/shards/${shard.file}`))?.arrayBuffer() ?? new ArrayBuffer(0));
+      if (await sha256(gz) !== shard.sha256) continue;
+      for (const line of (await gunzip(gz).text()).split("\n")) {
+        const row = line.trim() && JSON.parse(line);
+        if (row && !gone.has(row.track_id) && row.fields?.id === id) return row.fields;
+      }
+    }
+  }
+  return null;
+}
+
 async function download(url, total) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Could not download the map data (HTTP ${res.status}).`);
@@ -51,21 +78,24 @@ async function download(url, total) {
 }
 
 async function load() {
-  const res = await fetch(MANIFEST);
-  if (!res.ok) throw new Error(`Could not load the map manifest (HTTP ${res.status}).`);
-  const manifest = await res.json();
+  const record = await regionRecord(REGION).catch(() => null);
+  let manifest = record && { file: record.file, sha256: record.sha256, bytes: record.bytes };
+  if (!manifest) {
+    const res = await fetch(MANIFEST);
+    if (!res.ok) throw new Error(`Could not load the map manifest (HTTP ${res.status}).`);
+    manifest = await res.json();
+  }
   const [gz, code] = await Promise.all([
     download(`${DATA}${manifest.file}`, manifest.bytes),
     fetch("quest.wasm").then((r) => r.arrayBuffer()),
   ]);
-  const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", gz))]
-    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  const digest = await sha256(gz);
   if (digest !== manifest.sha256) throw new Error("The map data failed its integrity check, so it was not used.");
-  const raw = new Uint8Array(await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+  const raw = new Uint8Array(await gunzip(gz).arrayBuffer());
   wasm = (await WebAssembly.instantiate(code, {})).instance.exports;
   const out = reply(wasm.quest_load(copyIn(raw), raw.length)); // quest_load takes ownership of the buffer
   if (out.error) throw new Error(out.error);
-  postMessage({ type: "ready", meta: out.meta, sha256: digest });
+  postMessage({ type: "ready", meta: out.meta, sha256: digest, checked: record ? "record" : "site" });
 }
 
 const ready = load().catch((e) => { wasm = null; postMessage({ type: "error", message: e.message }); });

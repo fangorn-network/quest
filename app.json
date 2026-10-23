@@ -10,19 +10,38 @@
   "agent": "web/agent.js",
   "examples": []
  },
- "tags": ["directions", "maps", "privacy", "mississippi"],
+ "tags": [
+  "directions",
+  "maps",
+  "privacy",
+  "mississippi"
+ ],
  "types": {
   "quest.region.v1": {
    "description": "One region's map data for private, on-device directions: a bundle of roads and addresses, its size, its sha256 and where to download it.",
    "role_map": {
     "identity": "id",
     "title": "title",
-    "tags": ["tags"],
-    "text": ["text"]
+    "tags": [
+     "tags"
+    ],
+    "text": [
+     "text"
+    ]
    },
    "presentation": {
-    "types": { "quest.region.v1": { "singular": "region", "plural": "regions" } },
-    "facets": ["tags"]
+    "types": {
+     "quest.region.v1": {
+      "singular": "region",
+      "plural": "regions"
+     }
+    },
+    "facets": [
+     "tags"
+    ],
+    "externalUrl": {
+     "quest.region.v1": "https://quest.fangorn.network/"
+    }
    }
   }
  },
