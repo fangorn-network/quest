@@ -298,9 +298,23 @@ def edit_distance(a, b):
 GENERIC = {"RESTAURANT", "CAFE", "GRILL", "BAR", "STATION", "STORE", "SHOP", "INC", "LLC", "CO", "THE", "AND"}
 
 
+# One word, spelled many ways: each spelling is read as the first. The same list as core/src/places.rs.
+SPELLINGS = [["BARBECUE", "BBQ", "BARBEQUE", "BAR B Q", "BAR B QUE", "BAR B CUE"]]
+
+
+def respell(n):
+    n = f" {n} "
+    for words in SPELLINGS:
+        for w in words[1:]:
+            n = n.replace(f" {w} ", f" {words[0]} ")
+    return n.strip()
+
+
 def name_like(a, b):
     """Two normalized names for one place: equal, one the other's first words ("TEXACO" / "TEXACO FLOWOOD"),
-    or a typo apart ("SUNCO" / "SUNOCO"), with or without generic words ("THAI ZAPP RESTAURANT" / "THAI ZAP")."""
+    or a typo apart ("SUNCO" / "SUNOCO"), with or without generic words ("THAI ZAPP RESTAURANT" / "THAI ZAP"),
+    however a word is spelled ("BURGERS BLUES BARBEQUE" / "BURGERS BLUES BARBECUE FLOWOOD")."""
+    a, b = respell(a), respell(b)
     if like(a, b):
         return True
     core = lambda n: " ".join(w for w in n.split() if w not in GENERIC) or n

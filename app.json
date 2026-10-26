@@ -3,7 +3,7 @@
  "name": "quest",
  "description": "Printable driving directions for Mississippi, found and routed in your browser from OpenStreetMap and US Census data: the addresses you type never leave your device.",
  "network": "baseSepolia",
- "fromBlock": 48884613,
+ "fromBlock": 50632909,
  "site": {
   "project": "quest",
   "pages": "web",

@@ -60,6 +60,10 @@ assert len(kept(place("Texaco", 32.35844, -90.01318, street="690 Grants Ferry Rd
 # Generic words aside, a typo apart: one place. Different names that only share a generic word: two.
 assert kept(place("Thai Zap", 32.33702, -90.06670, "restaurant", src=1), place("Thai Zapp Restaurant", 32.33709, -90.06672, "restaurant", "145 Market St")) == ["Thai Zapp Restaurant"]
 assert len(kept(place("Joe's Grill", 32.3, -90.1, "restaurant"), place("Mama's Grill", 32.3 + 30 * m, -90.1, "restaurant"))) == 2
+# Spelled two ways, one place: Burgers Blues at 108 Market St, Flowood.
+assert kept(place("Burgers Blues & Barbeque", 32.33826, -90.06738, "restaurant", "108 Market Street"),
+            place("Burgers Blues Barbecue - Flowood", 32.33828, -90.06737, "restaurant", "108 Market St b", src=1)) == ["Burgers Blues & Barbeque"]
+assert len(kept(place("Joe's BBQ", 32.3, -90.1, "restaurant"), place("Bob's Bar-B-Q", 32.3 + 30 * m, -90.1, "restaurant"))) == 2
 # A shopping centre's tenants share its address, and stay separate places.
 assert kept(place("Five Guys", 32.43389, -90.14833, "restaurant", "1000 Highland Colony Pkwy"),
             place("Local 463", 32.43450, -90.14838, "restaurant", "1000 Highland Colony Pkwy")) == ["Five Guys", "Local 463"]

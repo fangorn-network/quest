@@ -187,6 +187,13 @@ fn finds_places_near_somewhere() {
     assert_eq!(q.places("cheap gas near Hattiesburg", None, 5).unwrap().what, "gas station");
     // A category that is no kind of ours, and a name.
     assert!(q.places("barbecue in Clarksdale", None, 20).unwrap().results.iter().any(|l| l.label.starts_with("Abe's")));
+    // Every spelling of barbecue finds the same places: listed as barbecue, or named it any way.
+    let bbq = |s: &str| q.places(s, None, 20).unwrap().results.into_iter().map(|l| l.label).collect::<Vec<_>>();
+    let barbecue = bbq("barbecue flowood");
+    for s in ["bbq flowood", "barbeque flowood", "Bar-B-Q in Flowood"] {
+        assert_eq!(bbq(s), barbecue, "{s}");
+    }
+    assert!(barbecue.iter().any(|l| l.starts_with("Triple A's Barbeque")) && barbecue.iter().any(|l| l.starts_with("Tin Shed BBQ")));
     let walmart = q.places("Walmart near Oxford", None, 10).unwrap();
     assert!(!walmart.results.is_empty() && walmart.results.iter().all(|l| l.label.to_lowercase().contains("walmart")));
     assert!(walmart.results.iter().all(|l| l.kind.as_deref() != Some("money transfer service")), "counters inside stores");

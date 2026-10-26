@@ -57,10 +57,21 @@ fn singular(w: &str) -> String {
     }
 }
 
-/// Lowercase words, punctuation dropped, each made singular: "Gas Stations" -> "gas station".
+/// One word, spelled many ways: each spelling is read as the first. The same list as pipeline/build_bundle.py.
+// ponytail: a short list grown by complaint; move to categories.json if it gets long.
+const SPELLINGS: [&[&str]; 1] = [&["barbecue", "bbq", "barbeque", "bar b q", "bar b que", "bar b cue"]];
+
+/// Lowercase words, punctuation dropped, each made singular, one spelling per word: "Bar-B-Q Joints" ->
+/// "barbecue joint".
 fn singular_phrase(s: &str) -> String {
     let clean: String = s.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
-    clean.split_whitespace().map(singular).collect::<Vec<_>>().join(" ")
+    let mut p = format!(" {} ", clean.split_whitespace().map(singular).collect::<Vec<_>>().join(" "));
+    for words in SPELLINGS {
+        for w in &words[1..] {
+            p = p.replace(&format!(" {w} "), &format!(" {} ", words[0]));
+        }
+    }
+    p.trim().to_string()
 }
 
 /// Does place i's category ("thai restaurant") or name ("Thai Zapp") carry the words of `q`?
@@ -179,7 +190,9 @@ pub fn search(b: &Bundle, g: &Geocoder, query: &str, near: Option<[f64; 2]>, lim
             (what, Box::new(move |i| kinds.contains(&b.pl_kind[i]) && qualified(b, &qualifier, i)))
         }
     } else if !cats.is_empty() {
-        (phrase.clone(), Box::new(move |i| cats.contains(&b.pl_cat[i])))
+        // Listed as it ("barbecue restaurant"), or named it ("Triple A's Barbeque", listed as a restaurant).
+        let p = phrase.clone();
+        (phrase.clone(), Box::new(move |i| cats.contains(&b.pl_cat[i]) || qualified(b, &p, i)))
     } else {
         let key = g.norm.normalize(&what);
         let mut ids: Vec<u32> = g.places.exact(&key).into_iter().chain(g.places.loose(&key)).map(|(i, _)| i).collect();
