@@ -77,6 +77,9 @@ fn draws_the_route_map() {
     for class in ["m-major", "m-route", "m-start", "m-end", "m-scale"] {
         assert!(svg.contains(class), "{class} missing");
     }
+    // The scale bar sits outside the world group the page moves while dragging.
+    let world_end = svg.rfind("</g><g class=\"m-scale\"").expect("scale bar after the world group");
+    assert!(svg.find("<g class=\"m-world\">").unwrap() < world_end);
     // Zoomed out over the whole state, no residential streets; zoomed into downtown Jackson, they appear.
     let state: serde_json::Value = serde_json::from_str(&q.call(r#"{"fn":"map","width":800,"height":600}"#)).unwrap();
     assert!(!state["svg"].as_str().unwrap().contains("m-minor"));

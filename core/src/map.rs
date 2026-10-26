@@ -275,7 +275,7 @@ impl Map {
         let mut svg = String::new();
         let _ = write!(
             svg,
-            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:.0} {h:.0}" role="img" aria-label="Map{}"><rect class="m-bg" width="100%" height="100%"/>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:.0} {h:.0}" role="img" aria-label="Map{}"><rect class="m-bg" width="100%" height="100%"/><g class="m-world">"#,
             if req.route.is_empty() { "" } else { " of the route" }
         );
         for (g, d) in paths.iter().enumerate() {
@@ -359,7 +359,9 @@ impl Map {
         let label = if nice < 0.1 { format!("{:.0} ft", nice * 5280.0) } else { format!("{nice} mi") };
         let _ = write!(
             svg,
-            r#"<g class="m-scale"><path d="M12 {y0:.0}v6h{bar:.1}v-6"/><text x="{:.1}" y="{:.0}">{label}</text></g></svg>"#,
+            // The world (roads, route, labels, pins) is one group the page can move while a finger drags it; the
+            // background and the scale bar stay where they are.
+            r#"</g><g class="m-scale"><path d="M12 {y0:.0}v6h{bar:.1}v-6"/><text x="{:.1}" y="{:.0}">{label}</text></g></svg>"#,
             12.0 + bar + 6.0,
             h - 12.0,
             y0 = h - 18.0

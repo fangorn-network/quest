@@ -179,10 +179,11 @@ function pan(dx, dy) {
   el.addEventListener("pointermove", (e) => {
     if (!pointers.has(e.pointerId) || !gesture) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const svg = el.querySelector("svg"), n = now(), r = el.getBoundingClientRect();
-    if (!svg) return;
-    svg.style.transformOrigin = `${gesture.x - r.left}px ${gesture.y - r.top}px`;
-    svg.style.transform = `translate(${n.x - gesture.x}px, ${n.y - gesture.y}px) scale(${scaleOf(gesture, n)})`;
+    // Move the map's world only: the scale bar stays put until the redraw gives it its new length.
+    const world = el.querySelector("svg .m-world"), n = now(), r = el.getBoundingClientRect();
+    if (!world) return;
+    world.style.transformOrigin = `${gesture.x - r.left}px ${gesture.y - r.top}px`;
+    world.style.transform = `translate(${n.x - gesture.x}px, ${n.y - gesture.y}px) scale(${scaleOf(gesture, n)})`;
   });
   const end = (e) => {
     if (!pointers.has(e.pointerId)) return;
