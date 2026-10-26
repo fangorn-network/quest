@@ -150,18 +150,49 @@ function pan(dx, dy) {
 
 {
   const el = $("map");
-  let drag = null;
-  el.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY }; el.setPointerCapture(e.pointerId); });
-  el.addEventListener("pointermove", (e) => {
-    const svg = drag && el.querySelector("svg");
-    if (svg) svg.style.transform = `translate(${e.clientX - drag.x}px, ${e.clientY - drag.y}px)`;
-  });
-  el.addEventListener("pointerup", (e) => {
-    if (!drag) return;
-    const [dx, dy] = [e.clientX - drag.x, e.clientY - drag.y];
-    drag = null;
+  // One finger (or a mouse) drags; two pinch. The drawn map follows the fingers as a CSS transform, and is
+  // redrawn once when the gesture ends, so a gesture costs one render however long it lasts.
+  const pointers = new Map(); // pointerId -> { x, y }
+  let gesture = null;         // where the fingers started: centre x, y and spread d
+  const now = () => {
+    const ps = [...pointers.values()];
+    if (ps.length < 2) return { x: ps[0].x, y: ps[0].y, d: 0 };
+    return { x: (ps[0].x + ps[1].x) / 2, y: (ps[0].y + ps[1].y) / 2, d: Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) };
+  };
+  const scaleOf = (g, n) => (g.d && n.d ? n.d / g.d : 1);
+  // Turn the gesture so far into a new view: zoom about where the pinch started, then pan.
+  const commit = () => {
+    if (!gesture || !pointers.size) return;
+    const n = now(), s = scaleOf(gesture, n), r = el.getBoundingClientRect();
+    const [dx, dy] = [n.x - gesture.x, n.y - gesture.y];
+    if (Math.abs(s - 1) > 0.02) zoom(s, (gesture.x - r.left) / r.width, (gesture.y - r.top) / r.height);
     if (Math.abs(dx) + Math.abs(dy) > 2) pan(dx, dy);
+    gesture = null;
+  };
+  const begin = () => { gesture = pointers.size ? now() : null; };
+  el.addEventListener("pointerdown", (e) => {
+    commit(); // a second finger arriving ends the drag so far, and starts a pinch
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    el.setPointerCapture(e.pointerId);
+    begin();
   });
+  el.addEventListener("pointermove", (e) => {
+    if (!pointers.has(e.pointerId) || !gesture) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const svg = el.querySelector("svg"), n = now(), r = el.getBoundingClientRect();
+    if (!svg) return;
+    svg.style.transformOrigin = `${gesture.x - r.left}px ${gesture.y - r.top}px`;
+    svg.style.transform = `translate(${n.x - gesture.x}px, ${n.y - gesture.y}px) scale(${scaleOf(gesture, n)})`;
+  });
+  const end = (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    commit();
+    pointers.delete(e.pointerId);
+    begin(); // a finger left: carry on dragging with the one still down
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
   el.addEventListener("wheel", (e) => {
     e.preventDefault();
     const r = el.getBoundingClientRect();
@@ -179,8 +210,15 @@ function pan(dx, dy) {
   $("zoom-in").addEventListener("click", () => zoom(1.6));
   $("zoom-out").addEventListener("click", () => zoom(1 / 1.6));
   $("zoom-fit").addEventListener("click", () => { view.bbox = null; view.moves++; drawMap(); });
-  let resize;
-  new ResizeObserver(() => { clearTimeout(resize); resize = setTimeout(drawMap, 150); }).observe(el);
+  // Redraw when the map's size really changes (a rotated phone), not on every scroll: mobile browsers resize
+  // the viewport as their address bar shows and hides.
+  let resize, drawnSize = "";
+  new ResizeObserver(() => {
+    const size = `${el.clientWidth}x${el.clientHeight}`;
+    if (size === drawnSize) return;
+    clearTimeout(resize);
+    resize = setTimeout(() => { drawnSize = size; drawMap(); }, 150);
+  }).observe(el);
 }
 
 $("trip").addEventListener("submit", async (ev) => {

@@ -35,15 +35,17 @@ pub struct Map {
     region: [f64; 4],
 }
 
-// ponytail: which roads to draw at which zoom, by the view's width in km; a knob, tune by eye.
-fn max_view_km(class: &str) -> f64 {
+// ponytail: which roads to draw at which zoom, by metres per pixel (so a phone's narrow map gets no more than it
+// can show), tuned on a 700 px map: a knob, by eye.
+fn max_mpp(class: &str) -> f64 {
     match class {
-        "motorway" | "trunk" | "primary" => f64::INFINITY,
-        "secondary" => 150.0,
-        "tertiary" => 60.0,
-        c if c.ends_with("_link") => 40.0,
-        "unclassified" | "residential" => 12.0,
-        _ => 3.0,
+        "motorway" | "trunk" => f64::INFINITY,
+        "primary" => 1600.0,
+        "secondary" => 214.0,
+        "tertiary" => 86.0,
+        c if c.ends_with("_link") => 57.0,
+        "unclassified" | "residential" => 17.0,
+        _ => 4.3,
     }
 }
 
@@ -59,20 +61,20 @@ const GROUPS: [&str; 4] = ["m-minor", "m-secondary", "m-primary", "m-major"];
 
 // ponytail: which roads carry labels at which zoom, and how far apart; knobs like max_view_km, tuned by eye.
 // The rank orders placement: a lower rank is placed first and wins where labels would overlap.
-fn shield_rank(class: &str, view_km: f64) -> Option<u8> {
+fn shield_rank(class: &str, mpp: f64) -> Option<u8> {
     match class {
         "motorway" => Some(0),
         "trunk" => Some(1),
-        "primary" if view_km <= 150.0 => Some(2),
+        "primary" if mpp <= 214.0 => Some(2),
         _ => None,
     }
 }
-fn name_rank(class: &str, view_km: f64) -> Option<u8> {
+fn name_rank(class: &str, mpp: f64) -> Option<u8> {
     match class {
-        "motorway" | "trunk" | "primary" if view_km <= 25.0 => Some(3),
-        "secondary" | "tertiary" if view_km <= 25.0 => Some(4),
-        "unclassified" | "residential" | "living_street" if view_km <= 6.0 => Some(5),
-        "service" if view_km <= 2.0 => Some(6),
+        "motorway" | "trunk" | "primary" if mpp <= 36.0 => Some(3),
+        "secondary" | "tertiary" if mpp <= 36.0 => Some(4),
+        "unclassified" | "residential" | "living_street" if mpp <= 8.6 => Some(5),
+        "service" if mpp <= 2.9 => Some(6),
         _ => None,
     }
 }
@@ -231,8 +233,9 @@ impl Map {
         (s, west, n, e) = (cy - half_lat, cx - half_lon, cy + half_lat, cx + half_lon);
         let px = |la: f64, lo: f64| ((lo - west) * k * scale, (n - la) * scale);
 
-        let view_km = (e - west) * k * 111.32;
-        let allowed: Vec<bool> = b.classes.iter().map(|c| view_km <= max_view_km(c)).collect();
+        let mpp = (e - west) * k * 111_320.0 / w; // metres per pixel
+        let allowed: Vec<bool> = b.classes.iter().map(|c| mpp <= max_mpp(c)).collect();
+        let mut drawn: [Vec<u32>; 4] = Default::default();
         let q = |d: f64| (d * 1e7) as i32;
         let (qs, qw, qn, qe) = (q(s), q(west), q(n), q(e));
         let mut paths = [String::new(), String::new(), String::new(), String::new()];
@@ -243,20 +246,27 @@ impl Map {
             if !allowed[class] || bx[2] < qs || bx[0] > qn || bx[3] < qw || bx[1] > qe {
                 continue;
             }
-            line(&mut paths[group(&b.classes[class])], b.shape(i as u32).iter().map(|&(la, lo)| px(la, lo)));
+            drawn[group(&b.classes[class])].push(i as u32);
             let mut add = |shield: bool, text: &str, rank: u8| {
                 let entry = labelled.entry((shield, text.to_string())).or_insert((rank, Vec::new()));
                 entry.0 = entry.0.min(rank);
                 entry.1.push(i as u32);
             };
-            if let Some(rank) = shield_rank(&b.classes[class], view_km) {
+            if let Some(rank) = shield_rank(&b.classes[class], mpp) {
                 for r in b.names[b.edge_ref[i] as usize].split(';').map(str::trim).filter(|r| !r.is_empty()) {
                     add(true, r, rank);
                 }
             }
             let name = &b.names[b.edge_name[i] as usize];
-            if let (Some(rank), false) = (name_rank(&b.classes[class], view_km), name.is_empty()) {
+            if let (Some(rank), false) = (name_rank(&b.classes[class], mpp), name.is_empty()) {
                 add(false, name, rank);
+            }
+        }
+        // Each class's edges joined end to end and thinned to a pixel: a road costs points for the pixels it
+        // covers, not two per edge however short (the whole state at 360 px was 91k points, mostly piled up).
+        for (g, edges) in drawn.iter().enumerate() {
+            for chain in chains(b, edges) {
+                line(&mut paths[g], chain.iter().map(|&(la, lo)| px(la, lo)));
             }
         }
         let mut route = String::new();
@@ -365,7 +375,7 @@ fn line(d: &mut String, pts: impl Iterator<Item = (f64, f64)>) {
     let mut tail = None;
     for (x, y) in pts {
         tail = Some((x, y));
-        if last.is_some_and(|(lx, ly)| (x - lx).abs() < 0.7 && (y - ly).abs() < 0.7) {
+        if last.is_some_and(|(lx, ly)| (x - lx).abs() < 1.0 && (y - ly).abs() < 1.0) {
             continue;
         }
         let _ = write!(d, "{}{x:.1} {y:.1}", if first { "M" } else { "L" });

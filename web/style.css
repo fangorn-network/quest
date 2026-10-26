@@ -62,7 +62,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status.error { color: #b3261e; }
 
 .map { position: relative; margin: 8px 0 0; }
-.map-view { height: min(60vh, 460px); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+.map-view { height: min(60vh, 460px); height: min(60svh, 460px); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
   background: var(--map-bg); touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
 .map-view:active { cursor: grabbing; }
 .map-view:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
