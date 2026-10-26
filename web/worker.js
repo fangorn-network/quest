@@ -38,6 +38,19 @@ const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("S
   .map((b) => b.toString(16).padStart(2, "0")).join("");
 const gunzip = (bytes) => new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")));
 
+// The namespace's on-chain tip, which the view keeps as its sha256 digest, as the commit's CID (CIDv1,
+// dag-cbor, base32): what `fangorn status` prints. Null if there is none.
+function commitCid(head) {
+  if (!/^0x[0-9a-f]{64}$/i.test(head ?? "")) return null;
+  const bytes = [0x01, 0x71, 0x12, 0x20, ...head.slice(2).match(/../g).map((h) => parseInt(h, 16))];
+  let out = "b", bits = 0, v = 0;
+  for (const x of bytes) {
+    v = (v << 8) | x; bits += 8;
+    while (bits >= 5) out += "abcdefghijklmnopqrstuvwxyz234567"[(v >> (bits -= 5)) & 31];
+  }
+  return bits ? out + "abcdefghijklmnopqrstuvwxyz234567"[(v << (5 - bits)) & 31] : out;
+}
+
 // The region's record in the app's view (westmarch's layout: catalog -> domain manifest -> gzipped ndjson
 // shards of {track_id, fields}), each shard checked against its manifest's sha256. Null if there is none.
 async function regionRecord(id) {
@@ -52,7 +65,7 @@ async function regionRecord(id) {
       if (await sha256(gz) !== shard.sha256) continue;
       for (const line of (await gunzip(gz).text()).split("\n")) {
         const row = line.trim() && JSON.parse(line);
-        if (row && !gone.has(row.track_id) && row.fields?.id === id) return row.fields;
+        if (row && !gone.has(row.track_id) && row.fields?.id === id) return { ...row.fields, commit: commitCid(manifest.head) };
       }
     }
   }
@@ -95,7 +108,7 @@ async function load() {
   wasm = (await WebAssembly.instantiate(code, {})).instance.exports;
   const out = reply(wasm.quest_load(copyIn(raw), raw.length)); // quest_load takes ownership of the buffer
   if (out.error) throw new Error(out.error);
-  postMessage({ type: "ready", meta: out.meta, sha256: digest, checked: record ? "record" : "site" });
+  postMessage({ type: "ready", meta: out.meta, sha256: digest, checked: record ? "record" : "site", commit: record?.commit });
 }
 
 const ready = load().catch((e) => { wasm = null; postMessage({ type: "error", message: e.message }); });

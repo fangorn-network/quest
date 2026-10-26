@@ -110,6 +110,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .num { text-align: right !important; white-space: nowrap; }
 .note { color: var(--muted); font-size: 0.9rem; }
 .credit { color: var(--muted); font-size: 0.85rem; padding-top: 24px; padding-bottom: 32px; }
+.credit code { overflow-wrap: anywhere; }
 
 @media (min-width: 640px) {
   #trip { grid-template-columns: 1fr 1fr; align-items: start; }

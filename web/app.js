@@ -26,6 +26,10 @@ worker.onmessage = ({ data }) => {
     status(data.checked === "record"
       ? "Map data ready, matching quest's on-chain record. Nothing you type leaves this device."
       : "Map data ready. Nothing you type leaves this device.");
+    if (data.commit) {
+      $("data-commit").textContent = data.commit;
+      $("data-version").hidden = false;
+    }
     $("go").disabled = false;
     drawMap();
     $("find-go").disabled = false;
