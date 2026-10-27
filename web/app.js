@@ -18,6 +18,20 @@ function status(text, error = false) {
   $("status").classList.toggle("error", error);
 }
 
+// The lines that connect an agent to this site's MCP server, as westmarch's stock page gives them.
+const mcp = `${location.origin}/mcp`;
+$("mcp-cc").textContent = `claude mcp add --transport http quest ${mcp}`;
+$("mcp-json").textContent = JSON.stringify({ mcpServers: { quest: { type: "http", url: mcp } } }, null, 2);
+document.querySelectorAll("[data-copy]").forEach((b) => b.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText($(b.dataset.copy).textContent);
+    b.textContent = "Copied";
+  } catch {
+    b.textContent = "Select and copy";
+  }
+  setTimeout(() => { b.textContent = "Copy"; }, 1500);
+}));
+
 worker.onmessage = ({ data }) => {
   if (data.type === "progress") {
     status(`Downloading Mississippi map data: ${(data.loaded / 1e6).toFixed(1)} of ${(data.total / 1e6).toFixed(1)} MB`);

@@ -110,7 +110,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 .num { text-align: right !important; white-space: nowrap; }
 .note { color: var(--muted); font-size: 0.9rem; }
 .credit { color: var(--muted); font-size: 0.85rem; padding-top: 24px; padding-bottom: 32px; }
+.credit p { margin: 0 0 8px; }
 .credit code { overflow-wrap: anywhere; }
+.agents h2 { margin: 32px 0 8px; font-size: 1.1rem; }
+.copy { display: grid; gap: 4px; margin: 10px 0; }
+.copy small { color: var(--muted); }
+.copy pre { margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 0.8rem; overflow-x: auto; }
+.copy button { justify-self: start; padding: 4px 10px; font-size: 0.85rem; }
 
 @media (min-width: 640px) {
   #trip { grid-template-columns: 1fr 1fr; align-items: start; }

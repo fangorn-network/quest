@@ -75,13 +75,27 @@
     <p class="note">Computed on your device on <span id="r-date"></span> from map data dated <span id="r-data"></span>. Roads change; follow posted signs.</p>
     <button type="button" id="print" class="no-print">Print directions</button>
   </section>
+
+  <section id="agents" class="agents no-print" aria-labelledby="agents-title">
+    <h2 id="agents-title">Use quest with an agent</h2>
+    <p>In a browser with WebMCP, this page registers its tools: an agent can look up addresses, find places and get
+      directions, worked out on this device as yours are. quest is also an MCP server for its map data's record (where to
+      download it, its size and sha256), with nothing to install.</p>
+    <div class="copy"><small>Claude Code</small><pre id="mcp-cc"></pre><button type="button" data-copy="mcp-cc">Copy</button></div>
+    <div class="copy"><small>Any MCP client (streamable HTTP)</small><pre id="mcp-json"></pre><button type="button" data-copy="mcp-json">Copy</button></div>
+    <p class="note">Machine-readable: the <a href="./.well-known/agent-card.json">agent card</a>, and ERC-8004 agent
+      <code>84532:10386</code> on Base Sepolia.</p>
+  </section>
 </main>
 
 <footer class="credit">
-  Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL) and US Census Bureau TIGER/Line.
-  Places © <a href="https://docs.overturemaps.org/attribution/">Overture Maps Foundation</a>
-  (<a href="https://cdla.dev/permissive-2-0/">CDLA Permissive 2.0</a>; some sources Apache 2.0 or CC0) and OpenStreetMap.
-  <span id="data-version" hidden><br>Map data commit (on chain, Base Sepolia): <code id="data-commit"></code></span>
+  <p>quest runs on a public testnet. Everything published here is public and permanent, and the publisher is responsible for it.
+    The map data is checked against its on-chain record before it is used.<span class="no-print"> For AI agents:
+    <a href="./.well-known/agent-card.json">agent card</a> · <a href="#agents">connect</a>.</span></p>
+  <p>Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL) and US Census Bureau TIGER/Line.
+    Places © <a href="https://docs.overturemaps.org/attribution/">Overture Maps Foundation</a>
+    (<a href="https://cdla.dev/permissive-2-0/">CDLA Permissive 2.0</a>; some sources Apache 2.0 or CC0) and OpenStreetMap.</p>
+  <p id="data-version" hidden>Map data commit (on chain, Base Sepolia): <code id="data-commit"></code></p>
 </footer>
 </body>
 </html>
